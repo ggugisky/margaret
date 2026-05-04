@@ -1,0 +1,2 @@
+"""Margaret Gateway application package."""
+
