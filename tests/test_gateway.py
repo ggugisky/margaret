@@ -16,6 +16,18 @@ def test_health() -> None:
     assert resp.json() == {"ok": True, "service": "margaret-gateway"}
 
 
+def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
+    test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+
+    with TestClient(main.app) as client:
+        resp = client.get("/slack/status")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["enabled"] is False
+    assert payload["running"] is False
+
+
 def test_create_session_and_history(tmp_path, monkeypatch) -> None:
     test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)
