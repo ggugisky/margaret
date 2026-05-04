@@ -90,3 +90,21 @@ When `MARGARET_GATEWAY_TOKEN` is set, requests must include:
 ```text
 Authorization: Bearer change-me
 ```
+
+## Embedded Slack Socket Mode (DM MVP)
+
+Margaret Gateway can run an embedded Slack Socket Mode client in the same process.
+
+- Scope: DM/text-only MVP (ignores non-DM events and bot/self messages)
+- Routing: one Slack DM thread maps to one Margaret session
+- Execution: Slack bridge uses in-process adapter registry/store (no HTTP loopback)
+
+Environment variables:
+
+```bash
+export SLACK_ENABLED=true
+export SLACK_APP_TOKEN=xapp-your-app-level-token
+export SLACK_BOT_TOKEN=xoxb-your-bot-token
+```
+
+When `SLACK_ENABLED` is `false` (default), startup behavior remains unchanged.
