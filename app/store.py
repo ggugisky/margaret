@@ -77,6 +77,27 @@ class Store:
             conn.execute(
                 "create index if not exists idx_events_session_created on events(session_id, created_at)"
             )
+            conn.execute(
+                """
+                create table if not exists slack_threads (
+                    team_id text not null,
+                    channel_id text not null,
+                    thread_ts text not null,
+                    user_id text not null,
+                    session_id text not null,
+                    created_at text not null,
+                    updated_at text not null,
+                    primary key (team_id, channel_id, thread_ts, user_id),
+                    foreign key(session_id) references sessions(session_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                create index if not exists idx_slack_threads_session_id
+                on slack_threads(session_id)
+                """
+            )
 
     def create_session(
         self,
@@ -273,3 +294,60 @@ class Store:
                 "update sessions set status = ?, updated_at = ? where status = ?",
                 ("idle", now, "running"),
             )
+
+    def get_slack_thread_mapping(
+        self,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
+                from slack_threads
+                where team_id = ? and channel_id = ? and thread_ts = ? and user_id = ?
+                """,
+                (team_id, channel_id, thread_ts, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_slack_thread_mapping(
+        self,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str,
+        session_id: str,
+    ) -> None:
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into slack_threads (
+                    team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(team_id, channel_id, thread_ts, user_id) do update set
+                    session_id = excluded.session_id,
+                    updated_at = excluded.updated_at
+                """,
+                (team_id, channel_id, thread_ts, user_id, session_id, now, now),
+            )
+
+    def get_session_id_by_slack_thread(
+        self,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+        user_id: str,
+    ) -> str | None:
+        mapping = self.get_slack_thread_mapping(
+            team_id=team_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+        )
+        if not mapping:
+            return None
+        return str(mapping["session_id"])

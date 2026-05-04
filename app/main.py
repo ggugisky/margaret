@@ -28,10 +28,19 @@ from app.models import (
     ModelResponse,
 )
 from app.store import Store, utc_now
+from app.slack import SlackDMHandler, SlackIntegration
 
 
 app = FastAPI(title="Margaret Gateway", version="0.1.0")
 store = Store(settings.database_path)
+slack_integration = SlackIntegration(
+    settings=settings,
+    handler=SlackDMHandler(
+        store=store,
+        registry=registry,
+        default_agent=settings.default_agent,
+    ),
+)
 
 _session_locks: dict[str, asyncio.Lock] = {}
 
@@ -45,6 +54,12 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 @app.on_event("startup")
 async def startup_event() -> None:
     store.recover_stale_sessions()
+    await slack_integration.connect()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    await slack_integration.close()
 
 
 def require_auth(authorization: str | None = Header(default=None)) -> None:
@@ -62,6 +77,15 @@ def sse_event(event_type: str, data: dict) -> str:
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(ok=True, service="margaret-gateway")
+
+
+@app.get("/slack/status")
+async def slack_status(_: None = Depends(require_auth)) -> dict[str, bool]:
+    return {
+        "enabled": slack_integration.enabled,
+        "running": slack_integration.running,
+        "can_start": slack_integration.can_start(),
+    }
 
 
 @app.get("/agents")
