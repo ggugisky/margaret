@@ -19,6 +19,9 @@
 - Slack thread ↔ session mapping 구현
 - Slack user default (`default <agent> <model>`) 구현
 - Slack 새 thread bootstrap (`<agent> <model> [prompt...]`) 구현
+- Slack `app_mention` 기반 channel thread session 생성 구현
+- Slack Assistant thread middleware 연결
+- Slack native streaming reply 구현 (`chat.startStream` / `chat.appendStream` / `chat.stopStream`)
 - optional bearer token auth 구현
 - pytest 기반 Gateway test 작성
 - agent/model selection 계약 반영
@@ -95,7 +98,7 @@ uv run pytest
 현재 확인된 결과:
 
 ```text
-35 passed
+37 passed
 ```
 
 ## 운영 상태
@@ -106,6 +109,33 @@ uv run pytest
   - `~/project/margaret` → production은 현재 중지 상태
 - DEV는 Slack 활성화 + 기본 agent `codex`
 - production은 릴리즈 명령이 있을 때만 반영하도록 운영 중
+
+## Slack 점검 기록
+
+2026-05-05 기준 `nanatest` Slack app 점검 결과:
+
+- Bot token은 정상입니다.
+  - `auth.test` 성공
+  - `conversations.list`, `conversations.history` 성공
+  - `chat.postMessage` 성공
+  - App token의 `apps.connections.open` 성공
+- 초기 무응답 원인은 토큰 자체보다 Slack app event subscription / reinstall 설정 쪽으로 판단했습니다.
+- Slack app manifest에는 DM thread를 막는 옵션이 없습니다.
+- DM thread reply는 API 호출에서 `channel=D...`와 `thread_ts=<parent message ts>`를 넘기는 방식으로 동작합니다.
+- Slack은 thread reply 아래에 다시 nested thread를 만들 수 없습니다.
+  - reply message의 `ts`를 `thread_ts`로 보내도 Slack이 root thread의 `thread_ts`로 보정합니다.
+  - 따라서 thread 안 질문에는 같은 root thread에 답하고, 필요한 경우 답변 첫 줄에 원문 링크나 인용을 붙이는 방식이 현실적인 대안입니다.
+- Native streaming은 `momo` 방식에 맞춰 Slack Web API stream method를 사용합니다.
+  - 시작: `chat.startStream(channel, thread_ts)`
+  - 델타: `chat.appendStream(ts, markdown_text)`
+  - 종료: `chat.stopStream(ts)`
+  - stream API 실패 시 기존 loading message를 `chat.update`하는 fallback을 유지합니다.
+- Slack app 설정 체크리스트:
+  - Bot scopes: `chat:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`, `assistant:write`
+  - Bot events: `message.im`, `app_mention`, `assistant_thread_started`, `assistant_thread_context_changed`
+  - Socket Mode enabled
+  - App-level token scope: `connections:write`
+  - scope/event 변경 후 `Reinstall to Workspace` 필수
 
 ## Smoke Test
 
@@ -139,7 +169,7 @@ curl -s -N -X POST "http://127.0.0.1:8787/sessions/<session_id>/messages/stream"
 
 ### 2. Slack 운영 안정화
 
-- Slack app 설정(`message.im`, scopes, reinstall`) 확인 절차 문서화
+- Slack app 설정(`message.im`, scopes, reinstall`) 확인 절차 문서화 완료
 - Slack DM 실패 원인 로깅 강화
 - reply 실패 시 `say()` 예외 로깅 추가
 

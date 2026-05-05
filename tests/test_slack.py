@@ -70,6 +70,32 @@ def _build_registry() -> AgentRegistry:
     return registry
 
 
+class _FakeSlackClient:
+    def __init__(self) -> None:
+        self.posts: list[dict] = []
+        self.updates: list[dict] = []
+        self.deletes: list[dict] = []
+        self.api_calls: list[tuple[str, dict]] = []
+
+    async def chat_postMessage(self, **kwargs):
+        self.posts.append(kwargs)
+        return {"message": {"ts": "posted.1"}}
+
+    async def chat_update(self, **kwargs):
+        self.updates.append(kwargs)
+        return {"ok": True}
+
+    async def chat_delete(self, **kwargs):
+        self.deletes.append(kwargs)
+        return {"ok": True}
+
+    async def api_call(self, api_method: str, *, json: dict):
+        self.api_calls.append((api_method, json))
+        if api_method == "chat.startStream":
+            return {"ok": True, "ts": "stream.1"}
+        return {"ok": True, "ts": json.get("ts", "stream.1")}
+
+
 def test_settings_slack_enabled_parsing(monkeypatch) -> None:
     monkeypatch.setenv("SLACK_ENABLED", "true")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
@@ -204,6 +230,87 @@ async def test_dm_message_creates_and_reuses_session(tmp_path) -> None:
         "user",
         "assistant",
     ]
+
+
+@pytest.mark.anyio
+async def test_channel_app_mention_creates_thread_session(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_app_mention.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "app_mention",
+            "channel": "C1",
+            "user": "U1",
+            "ts": "2100.1",
+            "text": "<@B1> hello from channel",
+        },
+        say=say,
+    )
+
+    session_id = store.get_session_id_by_slack_thread(
+        team_id="T1",
+        channel_id="C1",
+        thread_ts="2100.1",
+        user_id="U1",
+    )
+    assert session_id is not None
+    history = store.get_history(session_id, limit=10)
+    assert history[0]["content"] == "hello from channel"
+    say.assert_awaited_with(text="dummy:hello from channel", thread_ts="2100.1")
+
+
+@pytest.mark.anyio
+async def test_slack_client_streams_reply_in_thread_with_native_stream(
+    tmp_path,
+) -> None:
+    store = Store(str(tmp_path / "slack_streaming_reply.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+    client = _FakeSlackClient()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "im",
+            "channel": "D1",
+            "user": "U1",
+            "thread_ts": "1000.1",
+            "ts": "1000.2",
+            "text": "hello",
+        },
+        say=say,
+        client=client,
+    )
+
+    say.assert_not_awaited()
+    assert client.posts == [
+        {"channel": "D1", "text": "생각 중...", "thread_ts": "1000.1"}
+    ]
+    assert client.deletes == [{"channel": "D1", "ts": "posted.1"}]
+    assert client.api_calls[0] == (
+        "chat.startStream",
+        {"channel": "D1", "thread_ts": "1000.1"},
+    )
+    assert client.api_calls[1] == (
+        "chat.appendStream",
+        {"channel": "D1", "ts": "stream.1", "markdown_text": "dummy:hello"},
+    )
+    assert client.api_calls[-1] == (
+        "chat.stopStream",
+        {"channel": "D1", "ts": "stream.1"},
+    )
 
 
 @pytest.mark.anyio
