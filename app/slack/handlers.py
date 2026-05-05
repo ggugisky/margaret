@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from app.adapters import AdapterState, AgentRegistry
 from app.store import Store
 
-from .models import SlackMessageContext
+from .models import SlackCommand, SlackMessageContext
 
 logger = logging.getLogger(__name__)
 
@@ -54,23 +54,148 @@ class SlackDMHandler:
             message_ts=message_ts,
         )
 
-        session_id = self._resolve_or_create_session(ctx)
-        reply_text = await self._run_agent_turn(session_id=session_id, text=ctx.text)
-        await say(text=reply_text, thread_ts=ctx.thread_ts)
-
-    def _resolve_or_create_session(self, ctx: SlackMessageContext) -> str:
-        session_id = self._store.get_session_id_by_slack_thread(
+        existing_session_id = self._store.get_session_id_by_slack_thread(
             team_id=ctx.team_id,
             channel_id=ctx.channel_id,
             thread_ts=ctx.thread_ts,
             user_id=ctx.user_id,
         )
-        if session_id:
-            return session_id
+        is_new_thread = existing_session_id is None
 
-        model_id = self._registry.resolve_model(self._default_agent, None)
+        command = self._parse_command(text=ctx.text)
+
+        if not is_new_thread and command is not None:
+            session = self._store.get_session(existing_session_id)
+            agent_id = str(session["agent_id"]) if session else "unknown"
+            model_id = (
+                str(session.get("model_id") or "default") if session else "default"
+            )
+            await say(
+                text=(
+                    f"This thread is locked to `{agent_id}` / `{model_id}`. "
+                    "Start a new DM thread to switch agent/model."
+                ),
+                thread_ts=ctx.thread_ts,
+            )
+            return
+
+        if command and command.kind == "default":
+            assert command.agent_id is not None  # noqa: S101
+            assert command.model_id is not None  # noqa: S101
+            model_id = self._resolve_model_or_reply(
+                agent_id=command.agent_id,
+                model_id=command.model_id,
+            )
+            if model_id is None:
+                await say(
+                    text=self._invalid_agent_model_message(
+                        agent_id=command.agent_id,
+                        model_id=command.model_id,
+                    ),
+                    thread_ts=ctx.thread_ts,
+                )
+                return
+            self._store.upsert_slack_user_default(
+                team_id=ctx.team_id,
+                user_id=ctx.user_id,
+                agent_id=command.agent_id,
+                model_id=model_id,
+            )
+            await say(
+                text=(
+                    f"Saved default for new threads: `{command.agent_id}` / `{model_id}`."
+                ),
+                thread_ts=ctx.thread_ts,
+            )
+            return
+
+        if not is_new_thread:
+            assert existing_session_id is not None  # noqa: S101
+            reply_text = await self._run_agent_turn(
+                session_id=existing_session_id, text=ctx.text
+            )
+            await say(text=reply_text, thread_ts=ctx.thread_ts)
+            return
+
+        session_id: str
+        first_turn_text: str | None
+
+        if command and command.kind == "start":
+            assert command.agent_id is not None  # noqa: S101
+            assert command.model_id is not None  # noqa: S101
+            model_id = self._resolve_model_or_reply(
+                agent_id=command.agent_id,
+                model_id=command.model_id,
+            )
+            if model_id is None:
+                await say(
+                    text=self._invalid_agent_model_message(
+                        agent_id=command.agent_id,
+                        model_id=command.model_id,
+                    ),
+                    thread_ts=ctx.thread_ts,
+                )
+                return
+            session_id = self._create_slack_session(
+                ctx=ctx,
+                agent_id=command.agent_id,
+                model_id=model_id,
+            )
+            first_turn_text = (command.prompt or "").strip() or None
+            if not first_turn_text:
+                await say(
+                    text=(
+                        f"Started new thread with `{command.agent_id}` / `{model_id}`."
+                    ),
+                    thread_ts=ctx.thread_ts,
+                )
+                return
+        else:
+            default_pref = self._store.get_slack_user_default(
+                team_id=ctx.team_id,
+                user_id=ctx.user_id,
+            )
+            if default_pref:
+                agent_id = str(default_pref["agent_id"])
+                requested_model = str(default_pref["model_id"])
+            else:
+                agent_id = self._default_agent
+                requested_model = None
+
+            model_id = self._resolve_model_or_reply(
+                agent_id=agent_id,
+                model_id=requested_model,
+            )
+            if model_id is None:
+                await say(
+                    text=self._invalid_agent_model_message(
+                        agent_id=agent_id,
+                        model_id=requested_model,
+                    ),
+                    thread_ts=ctx.thread_ts,
+                )
+                return
+            session_id = self._create_slack_session(
+                ctx=ctx,
+                agent_id=agent_id,
+                model_id=model_id,
+            )
+            first_turn_text = ctx.text
+
+        reply_text = await self._run_agent_turn(
+            session_id=session_id, text=first_turn_text
+        )
+        await say(text=reply_text, thread_ts=ctx.thread_ts)
+
+    def _create_slack_session(
+        self,
+        *,
+        ctx: SlackMessageContext,
+        agent_id: str,
+        model_id: str,
+    ) -> str:
         session = self._store.create_session(
-            agent_id=self._default_agent,
+            agent_id=agent_id,
             model_id=model_id,
             title="Slack DM session",
             client="slack",
@@ -85,6 +210,60 @@ class SlackDMHandler:
             session_id=session_id,
         )
         return session_id
+
+    def _parse_command(self, *, text: str) -> SlackCommand | None:
+        tokens = text.split()
+        if not tokens:
+            return None
+
+        start = 1 if tokens[0].startswith("<@") and tokens[0].endswith(">") else 0
+        if start >= len(tokens):
+            return None
+        core = tokens[start:]
+        if not core:
+            return None
+
+        head = core[0]
+        if head == "default":
+            if len(core) != 3:
+                return None
+            return SlackCommand(kind="default", agent_id=core[1], model_id=core[2])
+
+        if len(core) < 2:
+            return None
+        if not self._is_known_agent(core[0]):
+            return None
+
+        prompt = " ".join(core[2:]).strip() if len(core) > 2 else None
+        return SlackCommand(
+            kind="start",
+            agent_id=core[0],
+            model_id=core[1],
+            prompt=prompt,
+        )
+
+    def _is_known_agent(self, agent_id: str) -> bool:
+        return any(agent.id == agent_id for agent in self._registry.list_agents())
+
+    def _resolve_model_or_reply(
+        self, *, agent_id: str, model_id: str | None
+    ) -> str | None:
+        try:
+            return self._registry.resolve_model(agent_id, model_id)
+        except (KeyError, ValueError):
+            return None
+
+    def _invalid_agent_model_message(
+        self, *, agent_id: str, model_id: str | None
+    ) -> str:
+        agents = self._registry.list_agents()
+        known_agents = ", ".join(sorted(agent.id for agent in agents))
+        model_hint = f"`{model_id}`" if model_id is not None else "the default model"
+        return (
+            f"Invalid agent/model: `{agent_id}` / {model_hint}. "
+            f"Known agents: {known_agents}. "
+            "Use `/agents` to see available models for each agent."
+        )
 
     async def _run_agent_turn(self, *, session_id: str, text: str) -> str:
         session = self._store.get_session(session_id)

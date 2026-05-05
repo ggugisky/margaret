@@ -98,6 +98,19 @@ class Store:
                 on slack_threads(session_id)
                 """
             )
+            conn.execute(
+                """
+                create table if not exists slack_user_defaults (
+                    team_id text not null,
+                    user_id text not null,
+                    agent_id text not null,
+                    model_id text not null,
+                    created_at text not null,
+                    updated_at text not null,
+                    primary key (team_id, user_id)
+                )
+                """
+            )
 
     def create_session(
         self,
@@ -351,3 +364,40 @@ class Store:
         if not mapping:
             return None
         return str(mapping["session_id"])
+
+    def get_slack_user_default(
+        self, team_id: str, user_id: str
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select team_id, user_id, agent_id, model_id, created_at, updated_at
+                from slack_user_defaults
+                where team_id = ? and user_id = ?
+                """,
+                (team_id, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_slack_user_default(
+        self,
+        *,
+        team_id: str,
+        user_id: str,
+        agent_id: str,
+        model_id: str,
+    ) -> None:
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into slack_user_defaults (
+                    team_id, user_id, agent_id, model_id, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?)
+                on conflict(team_id, user_id) do update set
+                    agent_id = excluded.agent_id,
+                    model_id = excluded.model_id,
+                    updated_at = excluded.updated_at
+                """,
+                (team_id, user_id, agent_id, model_id, now, now),
+            )

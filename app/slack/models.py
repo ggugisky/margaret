@@ -11,3 +11,11 @@ class SlackMessageContext:
     text: str
     thread_ts: str
     message_ts: str
+
+
+@dataclass(frozen=True)
+class SlackCommand:
+    kind: str
+    agent_id: str | None = None
+    model_id: str | None = None
+    prompt: str | None = None
