@@ -603,3 +603,158 @@ async def test_non_dm_or_bot_messages_are_ignored(tmp_path) -> None:
     say.assert_not_awaited()
     sessions = store.list_sessions("1970-01-01T00:00:00+00:00")
     assert sessions == []
+
+
+@pytest.mark.anyio
+async def test_channel_mention_creates_session_with_owner(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_ch_mention.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "app_mention",
+            "channel": "C1",
+            "user": "U1",
+            "ts": "5000.1",
+            "text": "<@BOT> hello",
+        },
+        say=say,
+    )
+
+    row = store.get_slack_thread_by_ts(
+        team_id="T1", channel_id="C1", thread_ts="5000.1"
+    )
+    assert row is not None
+    assert row["owner_user_id"] == "U1"
+    session_id = row["session_id"]
+    assert session_id is not None
+    say.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_channel_thread_owner_replies_without_mention(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_ch_thread_owner.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "app_mention",
+            "channel": "C1",
+            "user": "U1",
+            "ts": "5100.1",
+            "text": "<@BOT> hello",
+        },
+        say=say,
+    )
+    say.reset_mock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "channel",
+            "channel": "C1",
+            "user": "U1",
+            "thread_ts": "5100.1",
+            "ts": "5100.2",
+            "text": "follow up without mention",
+        },
+        say=say,
+    )
+
+    say.assert_awaited()
+    history = store.get_history(
+        store.get_slack_thread_by_ts(team_id="T1", channel_id="C1", thread_ts="5100.1")[
+            "session_id"
+        ],
+        limit=10,
+    )
+    roles = [e["role"] for e in history]
+    assert roles.count("user") == 2
+    assert roles.count("assistant") == 2
+
+
+@pytest.mark.anyio
+async def test_channel_thread_non_owner_is_ignored(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_ch_thread_nonowner.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "app_mention",
+            "channel": "C1",
+            "user": "U1",
+            "ts": "5200.1",
+            "text": "<@BOT> hello",
+        },
+        say=say,
+    )
+    say.reset_mock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "channel",
+            "channel": "C1",
+            "user": "U2",
+            "thread_ts": "5200.1",
+            "ts": "5200.2",
+            "text": "i am not the owner",
+        },
+        say=say,
+    )
+
+    say.assert_not_awaited()
+    history = store.get_history(
+        store.get_slack_thread_by_ts(team_id="T1", channel_id="C1", thread_ts="5200.1")[
+            "session_id"
+        ],
+        limit=10,
+    )
+    assert len([e for e in history if e["role"] == "user"]) == 1
+
+
+@pytest.mark.anyio
+async def test_channel_plain_message_without_mention_is_ignored(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_ch_plain.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "channel",
+            "channel": "C1",
+            "user": "U1",
+            "ts": "5300.1",
+            "text": "just talking in channel",
+        },
+        say=say,
+    )
+
+    say.assert_not_awaited()
+    assert store.list_sessions("1970-01-01T00:00:00+00:00") == []
