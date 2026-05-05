@@ -99,6 +99,18 @@ Margaret Gateway can run an embedded Slack Socket Mode client in the same proces
 - Routing: one Slack DM thread maps to one Margaret session
 - Execution: Slack bridge uses in-process adapter registry/store (no HTTP loopback)
 
+DM command syntax (plain text, no slash commands):
+
+- `@bot default <agent> <model>` (or mentionless `default <agent> <model>`):
+  save per-user defaults for future **new threads** only.
+- `@bot <agent> <model>` (or mentionless `<agent> <model>`):
+  in a **new thread**, create a session pinned to that agent/model.
+- `@bot <agent> <model> <prompt...>`:
+  in a **new thread**, create a session and run `<prompt...>` immediately.
+
+Thread mapping is immutable: once a DM thread is mapped to a session, agent/model
+cannot be switched in that thread. Start a new thread to switch.
+
 Environment variables:
 
 ```bash

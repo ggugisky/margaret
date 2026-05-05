@@ -7,6 +7,18 @@
 - SQLite `Store` 구현
 - REST+SSE API 구현
 - `echo` development adapter 구현
+- `codex` adapter 구현
+- `opencode` adapter 구현
+- `claude-code` adapter 구현
+- `copilot` adapter 구현
+- Persistent native CLI session resume 구현
+- `adapter_bindings` 기반 native session persistence 구현
+- `has_native_binding` session metadata 구현
+- per-session concurrency lock 및 stale session recovery 구현
+- Embedded Slack Socket Mode DM MVP 구현
+- Slack thread ↔ session mapping 구현
+- Slack user default (`default <agent> <model>`) 구현
+- Slack 새 thread bootstrap (`<agent> <model> [prompt...]`) 구현
 - optional bearer token auth 구현
 - pytest 기반 Gateway test 작성
 - agent/model selection 계약 반영
@@ -22,9 +34,17 @@ margaret/
 │   ├── config.py
 │   ├── main.py
 │   ├── models.py
-│   └── store.py
+│   ├── store.py
+│   └── slack/
+│       ├── __init__.py
+│       ├── handlers.py
+│       ├── models.py
+│       └── service.py
 ├── tests/
-│   └── test_gateway.py
+│   ├── test_adapters.py
+│   ├── test_concurrency.py
+│   ├── test_gateway.py
+│   └── test_slack.py
 ├── AGENTS.md
 ├── CONTEXT.md
 ├── DEVELOPMENT.md
@@ -40,6 +60,9 @@ PORT=8787
 MARGARET_DB_PATH=~/.margaret/gateway.sqlite3
 MARGARET_GATEWAY_TOKEN=
 MARGARET_DEFAULT_AGENT=echo
+SLACK_ENABLED=false
+SLACK_APP_TOKEN=
+SLACK_BOT_TOKEN=
 ```
 
 `MARGARET_GATEWAY_TOKEN`이 설정되면 요청에 다음 header가 필요합니다.
@@ -72,8 +95,17 @@ uv run pytest
 현재 확인된 결과:
 
 ```text
-4 passed
+35 passed
 ```
+
+## 운영 상태
+
+- 로컬 GitLab 동기화 완료
+- 원격 `nana` 배포 상태:
+  - `~/project/margaret-dev` → `DEV` 브랜치, 포트 `38091`
+  - `~/project/margaret` → production은 현재 중지 상태
+- DEV는 Slack 활성화 + 기본 agent `codex`
+- production은 릴리즈 명령이 있을 때만 반영하도록 운영 중
 
 ## Smoke Test
 
@@ -100,36 +132,27 @@ curl -s -N -X POST "http://127.0.0.1:8787/sessions/<session_id>/messages/stream"
 
 ## 다음 개발 단계
 
-### Phase 1: Adapter Contract 강화
+### 1. Lifespan 전환
 
-- `AgentAdapter`에 session lifecycle method 추가
-- `create_session`, `resume_session`, `stop`, `get_status` 경계 정의
-- streaming event를 단순 text delta에서 structured event로 확장
-- approval/HITL event type 초안 추가
+- FastAPI `@app.on_event("startup"/"shutdown")`를 lifespan으로 전환
+- 현재 pytest 경고 제거
 
-### Phase 2: OpenCode Adapter
+### 2. Slack 운영 안정화
 
-- OpenCode는 model 선택이 중요하므로 우선순위가 높습니다.
-- SDK가 안정적이면 SDK adapter로 구현합니다.
-- SDK가 부족하면 headless CLI/server mode fallback을 구현합니다.
-- `requires_model=true`로 model 선택을 강제합니다.
+- Slack app 설정(`message.im`, scopes, reinstall`) 확인 절차 문서화
+- Slack DM 실패 원인 로깅 강화
+- reply 실패 시 `say()` 예외 로깅 추가
 
-### Phase 3: Codex Adapter
+### 3. Voice 연동 UX 정교화
 
-- 우선 headless `codex exec` 기반 adapter로 시작합니다.
-- SDK/server API가 안정적이면 SDK adapter로 교체할 수 있게 내부 계약을 유지합니다.
-- session resume/continue 가능성을 별도로 검증합니다.
+- `has_native_binding` 활용
+- busy(409) 처리 UX 정리
+- session continuation 흐름 정리
 
-### Phase 4: Claude Code Adapter
+### 4. Session 전환 전략
 
-- Claude Code는 SDK와 headless mode가 모두 있으므로 SDK 우선 후보입니다.
-- `stream-json` event를 Gateway SSE event로 mapping합니다.
-
-### Phase 5: margaret-voice 연동
-
-- `margaret-voice` server가 Gateway `/agents`를 읽어 agent/model dropdown을 구성합니다.
-- `POST /sessions`로 session을 만들고 `model_id`를 저장합니다.
-- `/messages/stream` SSE를 기존 WebSocket `text_delta`, `done`, `error`로 변환합니다.
+- child session / handoff 설계
+- agent/model 전환 시 새 session 생성 UX 정리
 
 ## 설계 결정 기록
 
@@ -139,4 +162,3 @@ curl -s -N -X POST "http://127.0.0.1:8787/sessions/<session_id>/messages/stream"
 - interactive CLI/PTY 제어는 마지막 선택입니다.
 - `model_id`는 session의 1급 필드입니다.
 - `GET /agents`에서 model 목록과 `requires_model`을 제공해 client가 사전에 선택할 수 있게 합니다.
-

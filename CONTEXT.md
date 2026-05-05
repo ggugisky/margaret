@@ -125,9 +125,29 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
   - `content`
   - `created_at`
 - adapter_bindings (Persistent CLI Sessions):
-  - `session_id`: Gateway session mapping
-  - `native_session_id`: Underlying CLI session ID (thread_id, etc.)
-  - `last_active_at`: For stale session cleanup
+  - `session_id`
+  - `adapter_name`
+  - `adapter_state_json`
+  - `workspace_path`
+  - `status`
+  - `created_at`
+  - `updated_at`
+  - `last_used_at`
+- slack_threads:
+  - `team_id`
+  - `channel_id`
+  - `thread_ts`
+  - `user_id`
+  - `session_id`
+  - `created_at`
+  - `updated_at`
+- slack_user_defaults:
+  - `team_id`
+  - `user_id`
+  - `agent_id`
+  - `model_id`
+  - `created_at`
+  - `updated_at`
 
 ## Implementation Details
 
@@ -135,23 +155,36 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
 - **Concurrency Control**: Per-session `asyncio.Lock` is used to prevent concurrent streaming requests. Subsequent stream requests to an active session return a `409 Conflict`.
 - **Session Response**: The `has_native_binding` field indicates if a persistent CLI link exists.
 - **Recovery**: Startup recovery logic identifies and manages stale or orphaned native sessions.
+- **Slack DM Mapping**: 하나의 Slack DM thread는 하나의 Margaret session에 고정 매핑됩니다.
+- **Slack User Defaults**: Slack 사용자는 `default <agent> <model>` 형식으로 사용자별 기본 agent/model을 저장할 수 있습니다.
+- **Slack Thread Bootstrap**: 새 DM thread에서만 `@bot <agent> <model> [prompt...]` 형식으로 agent/model을 선택할 수 있고, 기존 thread에서는 변경할 수 없습니다.
 
 ## 현재 상태
 
 - `~/project/margaret`에 Gateway MVP가 구현되어 있습니다.
-- 개발용 `echo` adapter만 있습니다.
-- 실제 Codex/OpenCode/Claude Code/Copilot adapter는 아직 없습니다.
+- 실제 adapter가 구현되어 있습니다:
+  - `echo`
+  - `codex`
+  - `opencode`
+  - `claude-code`
+  - `copilot`
+- Persistent CLI session resume가 구현되어 있습니다.
+- Embedded Slack Socket Mode DM MVP가 구현되어 있습니다.
+- Slack DM에서는 다음이 가능합니다:
+  - 사용자별 default 저장: `@bot default <agent> <model>`
+  - 새 thread에서 agent/model 지정: `@bot <agent> <model> [prompt...]`
+- 현재 운영 상태:
+  - `nana:/home/ggugi/project/margaret-dev` → `DEV` 브랜치, 포트 `38091`, Slack 활성화, 기본 agent `codex`
+  - `nana:/home/ggugi/project/margaret` → production은 현재 중지 상태
 
 ## 아직 하지 않는 것
 
 - agent/model switching within a session: 세션 생성 시 지정된 agent/model은 변경할 수 없으며, 전환 시 새 세션을 생성해야 함
 - summary-based handoff: 서로 다른 agent 간의 요약 기반 맥락 전달 기능은 구현되지 않음
 - child-session navigation API: 하위 세션 탐색 및 관리 API 미지원
-- subprocess lifecycle 관리
+- subprocess pooling / daemonization
 - SDK 기반 adapter 구현
-- Slack App 연동
 - Web UI
 - workspace allowlist enforcement
 - approval/HITL flow
 - multi-user 권한 모델
-
