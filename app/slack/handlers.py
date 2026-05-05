@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import Awaitable, Callable
 from collections.abc import AsyncIterator
@@ -22,10 +23,12 @@ class SlackDMHandler:
         store: Store,
         registry: AgentRegistry,
         default_agent: str,
+        workspace_root: str = "/workspace",
     ) -> None:
         self._store = store
         self._registry = registry
         self._default_agent = default_agent
+        self._workspace_root = workspace_root
 
     async def handle_message(
         self,
@@ -246,12 +249,14 @@ class SlackDMHandler:
         model_id: str,
         is_mention: bool = False,
     ) -> str:
+        workspace_path = os.path.join(self._workspace_root, ctx.user_id)
+        os.makedirs(workspace_path, exist_ok=True)
         session = self._store.create_session(
             agent_id=agent_id,
             model_id=model_id,
             title="Slack session",
             client="slack",
-            workspace_path=None,
+            workspace_path=workspace_path,
         )
         session_id = str(session["session_id"])
         self._store.upsert_slack_thread_mapping(
