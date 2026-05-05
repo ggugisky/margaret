@@ -38,7 +38,11 @@ class SlackDMHandler:
         event_type = event.get("type")
         is_dm_message = event_type == "message" and event.get("channel_type") == "im"
         is_app_mention = event_type == "app_mention"
-        if not (is_dm_message or is_app_mention):
+        is_channel_message = (
+            event_type == "message" and event.get("channel_type") != "im"
+        )
+
+        if not (is_dm_message or is_app_mention or is_channel_message):
             logger.info(
                 "slack: ignoring event type=%s channel_type=%s subtype=%s",
                 event_type,
@@ -58,13 +62,29 @@ class SlackDMHandler:
         if not user_id or not channel_id or not message_ts or not text:
             return
 
+        raw_thread_ts = event.get("thread_ts")
+
+        if is_channel_message and not is_app_mention:
+            if not raw_thread_ts:
+                return
+            existing = self._store.get_slack_thread_by_ts(
+                team_id=team_id,
+                channel_id=channel_id,
+                thread_ts=raw_thread_ts,
+            )
+            if not existing:
+                return
+            if existing.get("owner_user_id") != user_id:
+                return
+
         ctx = SlackMessageContext(
             team_id=team_id,
             channel_id=channel_id,
             user_id=user_id,
             text=text,
-            thread_ts=event.get("thread_ts") or message_ts,
+            thread_ts=raw_thread_ts or message_ts,
             message_ts=message_ts,
+            is_dm=is_dm_message,
         )
 
         existing_session_id = self._store.get_session_id_by_slack_thread(
@@ -73,6 +93,16 @@ class SlackDMHandler:
             thread_ts=ctx.thread_ts,
             user_id=ctx.user_id,
         )
+
+        if existing_session_id is None and not ctx.is_dm and raw_thread_ts:
+            thread_row = self._store.get_slack_thread_by_ts(
+                team_id=ctx.team_id,
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+            )
+            if thread_row and thread_row.get("owner_user_id") == ctx.user_id:
+                existing_session_id = str(thread_row["session_id"])
+
         is_new_thread = existing_session_id is None
 
         command = self._parse_command(text=ctx.text)
@@ -156,6 +186,7 @@ class SlackDMHandler:
                 ctx=ctx,
                 agent_id=command.agent_id,
                 model_id=model_id,
+                is_mention=is_app_mention,
             )
             first_turn_text = (command.prompt or "").strip() or None
             if not first_turn_text:
@@ -195,6 +226,7 @@ class SlackDMHandler:
                 ctx=ctx,
                 agent_id=agent_id,
                 model_id=model_id,
+                is_mention=is_app_mention,
             )
             first_turn_text = ctx.text
 
@@ -212,6 +244,7 @@ class SlackDMHandler:
         ctx: SlackMessageContext,
         agent_id: str,
         model_id: str,
+        is_mention: bool = False,
     ) -> str:
         session = self._store.create_session(
             agent_id=agent_id,
@@ -227,6 +260,7 @@ class SlackDMHandler:
             thread_ts=ctx.thread_ts,
             user_id=ctx.user_id,
             session_id=session_id,
+            owner_user_id=ctx.user_id if is_mention else None,
         )
         return session_id
 

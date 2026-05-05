@@ -85,6 +85,7 @@ class Store:
                     thread_ts text not null,
                     user_id text not null,
                     session_id text not null,
+                    owner_user_id text,
                     created_at text not null,
                     updated_at text not null,
                     primary key (team_id, channel_id, thread_ts, user_id),
@@ -92,6 +93,12 @@ class Store:
                 )
                 """
             )
+            st_cols = {
+                row["name"]
+                for row in conn.execute("pragma table_info(slack_threads)").fetchall()
+            }
+            if "owner_user_id" not in st_cols:
+                conn.execute("alter table slack_threads add column owner_user_id text")
             conn.execute(
                 """
                 create index if not exists idx_slack_threads_session_id
@@ -318,11 +325,32 @@ class Store:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                select team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
+                select team_id, channel_id, thread_ts, user_id, session_id,
+                       owner_user_id, created_at, updated_at
                 from slack_threads
                 where team_id = ? and channel_id = ? and thread_ts = ? and user_id = ?
                 """,
                 (team_id, channel_id, thread_ts, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_slack_thread_by_ts(
+        self,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select team_id, channel_id, thread_ts, user_id, session_id,
+                       owner_user_id, created_at, updated_at
+                from slack_threads
+                where team_id = ? and channel_id = ? and thread_ts = ?
+                order by created_at asc
+                limit 1
+                """,
+                (team_id, channel_id, thread_ts),
             ).fetchone()
         return dict(row) if row else None
 
@@ -333,19 +361,31 @@ class Store:
         thread_ts: str,
         user_id: str,
         session_id: str,
+        owner_user_id: str | None = None,
     ) -> None:
         now = utc_now()
         with self._connect() as conn:
             conn.execute(
                 """
                 insert into slack_threads (
-                    team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?)
+                    team_id, channel_id, thread_ts, user_id, session_id,
+                    owner_user_id, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(team_id, channel_id, thread_ts, user_id) do update set
                     session_id = excluded.session_id,
+                    owner_user_id = coalesce(excluded.owner_user_id, slack_threads.owner_user_id),
                     updated_at = excluded.updated_at
                 """,
-                (team_id, channel_id, thread_ts, user_id, session_id, now, now),
+                (
+                    team_id,
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    session_id,
+                    owner_user_id,
+                    now,
+                    now,
+                ),
             )
 
     def get_session_id_by_slack_thread(
