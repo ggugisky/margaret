@@ -171,10 +171,11 @@ def test_slack_user_default_helpers(tmp_path) -> None:
 async def test_dm_message_creates_and_reuses_session(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_handler.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -236,10 +237,11 @@ async def test_dm_message_creates_and_reuses_session(tmp_path) -> None:
 async def test_channel_app_mention_creates_thread_session(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_app_mention.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -272,10 +274,11 @@ async def test_slack_client_streams_reply_in_thread_with_native_stream(
 ) -> None:
     store = Store(str(tmp_path / "slack_streaming_reply.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
     client = _FakeSlackClient()
 
@@ -319,10 +322,11 @@ async def test_default_command_saves_preference_without_creating_session(
 ) -> None:
     store = Store(str(tmp_path / "slack_default_cmd.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -355,10 +359,11 @@ async def test_default_command_saves_preference_without_creating_session(
 async def test_new_thread_uses_saved_default(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_saved_default.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     store.upsert_slack_user_default(
@@ -399,10 +404,11 @@ async def test_new_thread_uses_saved_default(tmp_path) -> None:
 async def test_new_thread_explicit_agent_model_creates_session(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_explicit_session.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -439,10 +445,11 @@ async def test_new_thread_explicit_agent_model_creates_session(tmp_path) -> None
 async def test_explicit_command_with_prompt_runs_prompt(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_explicit_prompt.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -478,10 +485,11 @@ async def test_explicit_command_with_prompt_runs_prompt(tmp_path) -> None:
 async def test_existing_thread_rejects_switch_attempt(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_lock.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -538,10 +546,11 @@ async def test_existing_thread_rejects_switch_attempt(tmp_path) -> None:
 async def test_invalid_agent_or_model_returns_safe_message(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_invalid_cmd.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -568,10 +577,11 @@ async def test_invalid_agent_or_model_returns_safe_message(tmp_path) -> None:
 async def test_non_dm_or_bot_messages_are_ignored(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_ignore.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -609,10 +619,11 @@ async def test_non_dm_or_bot_messages_are_ignored(tmp_path) -> None:
 async def test_channel_mention_creates_session_with_owner(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_ch_mention.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -641,10 +652,11 @@ async def test_channel_mention_creates_session_with_owner(tmp_path) -> None:
 async def test_channel_thread_owner_replies_without_mention(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_ch_thread_owner.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -690,10 +702,11 @@ async def test_channel_thread_owner_replies_without_mention(tmp_path) -> None:
 async def test_channel_thread_non_owner_is_ignored(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_ch_thread_nonowner.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
@@ -737,10 +750,11 @@ async def test_channel_thread_non_owner_is_ignored(tmp_path) -> None:
 async def test_channel_plain_message_without_mention_is_ignored(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_ch_plain.sqlite3"))
     handler = SlackDMHandler(
-        store=store,
-        registry=_build_registry(),
-        default_agent="dummy",
-    )
+            store=store,
+            registry=_build_registry(),
+            default_agent="dummy",
+            workspace_root=str(tmp_path / "ws"),
+        )
     say = AsyncMock()
 
     await handler.handle_message(
