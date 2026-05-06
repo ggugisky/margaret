@@ -7,10 +7,13 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.adapters import AdapterState, AgentRegistry
 from app.store import Store
+
+if TYPE_CHECKING:
+    from app.rag_memory import RagMemory
 
 from .models import SlackCommand, SlackMessageContext
 
@@ -25,11 +28,13 @@ class SlackDMHandler:
         registry: AgentRegistry,
         default_agent: str,
         workspace_root: str = "/workspace",
+        rag_memory: RagMemory | None = None,
     ) -> None:
         self._store = store
         self._registry = registry
         self._default_agent = default_agent
         self._workspace_root = workspace_root
+        self._rag = rag_memory
 
     async def handle_message(
         self,
@@ -439,6 +444,8 @@ class SlackDMHandler:
             raise RuntimeError(f"Unknown session: {session_id}")
 
         self._store.append_event(session_id=session_id, role="user", content=text)
+        if self._rag:
+            asyncio.create_task(self._rag.index_event(session_id, "user", text))
         self._store.set_session_status(session_id, "running")
 
         agent = self._registry.get(str(session["agent_id"]))
@@ -481,6 +488,10 @@ class SlackDMHandler:
                 role="assistant",
                 content=final_text,
             )
+            if self._rag and final_text:
+                asyncio.create_task(
+                    self._rag.index_event(session_id, "assistant", final_text)
+                )
             return final_text or "(no response)"
         except Exception as exc:
             self._store.append_event(

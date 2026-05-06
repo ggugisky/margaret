@@ -37,10 +37,20 @@ from app.security import create_signed_token, verify_signed_token
 from app.store import Store, utc_now
 from app.slack import SlackDMHandler, SlackIntegration
 from app.voice import PhoneVoiceWebSocketHandler, VoiceService
+from app.rag_memory import RagMemory
 
 
 app = FastAPI(title="Margaret Gateway", version="0.1.0")
 store = Store(settings.database_path)
+
+rag_memory: RagMemory | None = None
+if settings.rag_enabled:
+    try:
+        rag_memory = RagMemory(settings.rag_working_dir)
+    except RuntimeError as _e:
+        import logging
+        logging.getLogger(__name__).warning("RAG memory disabled: %s", _e)
+
 slack_integration = SlackIntegration(
     settings=settings,
     handler=SlackDMHandler(
@@ -48,6 +58,7 @@ slack_integration = SlackIntegration(
         registry=registry,
         default_agent=settings.default_agent,
         workspace_root="/workspace",
+        rag_memory=rag_memory,
     ),
 )
 
@@ -149,6 +160,8 @@ async def _stream_session_events(
 
     agent = registry.get(session["agent_id"])
     store.append_event(session_id=session_id, role="user", content=text)
+    if rag_memory:
+        asyncio.create_task(rag_memory.index_event(session_id, "user", text))
 
     async with lock:
         store.set_session_status(session_id, "running")
@@ -233,6 +246,10 @@ async def _stream_session_events(
                 role="assistant",
                 content=final_text,
             )
+            if rag_memory and final_text:
+                asyncio.create_task(
+                    rag_memory.index_event(session_id, "assistant", final_text)
+                )
             yield (
                 "done",
                 {
@@ -374,6 +391,18 @@ async def list_routes(
     _: None = Depends(require_auth),
 ) -> RoutesResponse:
     return RoutesResponse(routes=store.list_routes(limit=limit))
+
+
+@app.get("/memory/search")
+async def search_memory(
+    q: str,
+    mode: str = "hybrid",
+    _: None = Depends(require_auth),
+) -> dict:
+    if not rag_memory:
+        raise HTTPException(status_code=503, detail="RAG memory is not enabled")
+    result = await rag_memory.search(q, mode=mode)
+    return {"query": q, "mode": mode, "result": result}
 
 
 @app.post("/sessions/{session_id}/messages/stream")
