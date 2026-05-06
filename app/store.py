@@ -203,10 +203,16 @@ class Store:
             ).fetchone()
         return self._decorate_session(dict(row)) if row else None
 
-    def list_sessions(self, updated_after: str) -> list[dict[str, Any]]:
+    def list_sessions(
+        self,
+        updated_after: str,
+        *,
+        include_empty: bool = True,
+    ) -> list[dict[str, Any]]:
+        empty_filter = "" if include_empty else "having count(e.event_id) > 0"
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 select s.*, count(e.event_id) as message_count,
                        coalesce(substr((
                            select content from events
@@ -220,6 +226,7 @@ class Store:
                 left join adapter_bindings ab on ab.session_id = s.session_id
                 where s.updated_at >= ?
                 group by s.session_id
+                {empty_filter}
                 order by s.updated_at desc
                 """,
                 (updated_after,),

@@ -331,7 +331,9 @@ async def list_sessions(
     _: None = Depends(require_auth),
 ) -> SessionsResponse:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    return SessionsResponse(sessions=store.list_sessions(cutoff.isoformat()))
+    return SessionsResponse(
+        sessions=store.list_sessions(cutoff.isoformat(), include_empty=False)
+    )
 
 
 @app.get("/sessions/{session_id}/history", response_model=HistoryResponse)

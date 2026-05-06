@@ -310,6 +310,35 @@ def test_api_no_state_leak(tmp_path, monkeypatch) -> None:
         assert "adapter_state_json" not in history_str
 
 
+def test_sessions_endpoint_hides_empty_sessions(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "hide_empty.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+
+    empty = test_store.create_session(
+        agent_id="echo",
+        model_id="echo/default",
+        title="Empty",
+        client="voice",
+        workspace_path=None,
+    )
+    non_empty = test_store.create_session(
+        agent_id="echo",
+        model_id="echo/default",
+        title="Non Empty",
+        client="voice",
+        workspace_path=None,
+    )
+    test_store.append_event(non_empty["session_id"], "user", "hello")
+
+    with TestClient(main.app) as client:
+        resp = client.get("/sessions")
+
+    assert resp.status_code == 200
+    sessions = resp.json()["sessions"]
+    assert [session["session_id"] for session in sessions] == [non_empty["session_id"]]
+    assert empty["session_id"] not in {session["session_id"] for session in sessions}
+
+
 class _ResumeFailureAdapter(AgentAdapter):
     @property
     def info(self) -> AgentInfo:
@@ -507,6 +536,7 @@ def test_has_native_binding_flow(tmp_path, monkeypatch) -> None:
         assert created.status_code == 200
         session_id = created.json()["session_id"]
         assert created.json()["has_native_binding"] is False
+        test_store.append_event(session_id, "user", "hello")
 
         list_resp = client.get("/sessions")
         assert list_resp.json()["sessions"][0]["has_native_binding"] is False

@@ -113,14 +113,9 @@ class PhoneVoiceWebSocketHandler:
 
         await websocket.accept()
 
-        try:
-            active_session_id, model_id = self._create_session()
-        except Exception as exc:
-            await websocket.send_text(
-                json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
-            )
-            await websocket.close(code=1011)
-            return
+        active_session_id: str | None = None
+        pending_model_id = self.resolve_agent_model(None)[1]
+        pending_workspace_name: str | None = None
 
         tts_provider = self.settings.default_tts_provider
         tts_voice = ""
@@ -135,20 +130,39 @@ class PhoneVoiceWebSocketHandler:
             {
                 "type": "connected",
                 "message": "Margaret Gateway connected",
-                "session_key": active_session_id,
+                "session_key": None,
                 "available_backends": ["margaret-gateway"],
                 "available_models": self._agent_models_payload(),
-                "current_model": model_id,
+                "current_model": pending_model_id,
             }
         )
 
+        async def ensure_active_session() -> tuple[str, str | None]:
+            nonlocal active_session_id, pending_model_id, pending_workspace_name
+            if active_session_id:
+                return active_session_id, pending_model_id
+            active_session_id, pending_model_id = self._create_session(
+                pending_model_id,
+                pending_workspace_name,
+            )
+            await send(
+                {
+                    "type": "session_created",
+                    "session_key": active_session_id,
+                    "current_model": pending_model_id,
+                }
+            )
+            await send({"type": "model_changed", "model": pending_model_id})
+            return active_session_id, pending_model_id
+
         async def run_text_message(text: str, location: dict | None = None) -> None:
+            session_id, _ = await ensure_active_session()
             await send({"type": "ack", "text": "알겠습니다", "user_text": text})
             await send({"type": "process_step", "step": "thinking"})
             await send({"type": "thinking"})
 
             async for event_type, data in self.stream_events(
-                active_session_id,
+                session_id,
                 text,
                 None,
                 location,
@@ -207,10 +221,11 @@ class PhoneVoiceWebSocketHandler:
 
                 if msg_type == "new_session":
                     try:
-                        active_session_id, model_id = self._create_session(
+                        active_session_id, pending_model_id = self._create_session(
                             msg.get("model"),
                             msg.get("workspace_name"),
                         )
+                        pending_workspace_name = msg.get("workspace_name")
                     except Exception as exc:
                         await send({"type": "error", "message": str(exc)})
                         continue
@@ -218,10 +233,10 @@ class PhoneVoiceWebSocketHandler:
                         {
                             "type": "session_created",
                             "session_key": active_session_id,
-                            "current_model": model_id,
+                            "current_model": pending_model_id,
                         }
                     )
-                    await send({"type": "model_changed", "model": model_id})
+                    await send({"type": "model_changed", "model": pending_model_id})
                     continue
 
                 if msg_type == "resume_session":
@@ -236,6 +251,7 @@ class PhoneVoiceWebSocketHandler:
                         )
                         continue
                     active_session_id = requested_session_id
+                    pending_model_id = existing.get("model_id")
                     await send(
                         {
                             "type": "session_resumed",
@@ -253,40 +269,26 @@ class PhoneVoiceWebSocketHandler:
                 if msg_type == "set_model":
                     try:
                         requested_model = str(msg.get("model") or "").strip()
-                        active_session_id, selected_model_id = self._create_session(
-                            requested_model,
-                            msg.get("workspace_name"),
-                        )
+                        _, selected_model_id = self.resolve_agent_model(requested_model)
+                        pending_model_id = selected_model_id
+                        pending_workspace_name = msg.get("workspace_name")
+                        active_session_id = None
                     except Exception as exc:
                         await send({"type": "error", "message": str(exc)})
                         continue
-                    await send(
-                        {
-                            "type": "session_created",
-                            "session_key": active_session_id,
-                            "current_model": selected_model_id,
-                        }
-                    )
                     await send({"type": "model_changed", "model": selected_model_id})
                     continue
 
                 if msg_type == "select_model":
                     try:
                         requested_model = str(msg.get("model") or "").strip()
-                        active_session_id, selected_model_id = self._create_session(
-                            str(msg.get("model") or "").strip(),
-                            msg.get("workspace_name"),
-                        )
+                        _, selected_model_id = self.resolve_agent_model(requested_model)
+                        pending_model_id = selected_model_id
+                        pending_workspace_name = msg.get("workspace_name")
+                        active_session_id = None
                     except Exception as exc:
                         await send({"type": "error", "message": str(exc)})
                         continue
-                    await send(
-                        {
-                            "type": "session_created",
-                            "session_key": active_session_id,
-                            "current_model": selected_model_id,
-                        }
-                    )
                     await send({"type": "model_changed", "model": selected_model_id})
                     continue
 
