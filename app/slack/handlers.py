@@ -634,6 +634,9 @@ class SlackStreamingResponder:
 
         if not self._delta_received:
             self._delta_received = True
+            delta = delta.lstrip("\n")
+            if not delta:
+                return
 
         if self._stream_ts:
             self._pending_delta += delta
@@ -645,7 +648,7 @@ class SlackStreamingResponder:
         now = time.monotonic()
         if now - self._last_update < self._throttle_seconds:
             return
-        await self._fallback_update(f"{self._format_text(full_text)}\n\n_..._")
+        await self._fallback_update(f"{self._format_text(full_text.lstrip())}\n\n_..._")
         self._last_update = now
 
     async def finish(self, text: str) -> None:
