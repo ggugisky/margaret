@@ -405,6 +405,8 @@ class SlackDMHandler:
             thread_ts=ctx.thread_ts,
             set_status=set_status,
             label=label,
+            user_id=ctx.user_id,
+            team_id=ctx.team_id,
         )
         await responder.start()
 
@@ -534,6 +536,8 @@ class SlackStreamingResponder:
         throttle_seconds: float = 0.3,
         set_status: Any | None = None,
         label: str = "",
+        user_id: str = "",
+        team_id: str = "",
     ) -> None:
         self._client = client
         self._channel_id = channel_id
@@ -541,7 +545,11 @@ class SlackStreamingResponder:
         self._throttle_seconds = throttle_seconds
         self._set_status = set_status
         self._label = label
+        self._user_id = user_id
+        self._team_id = team_id
+        self._stream_ts: str | None = None
         self._fallback_ts: str | None = None
+        self._pending_delta = ""
         self._last_update = 0.0
         self._delta_received = False
         self._started_at = 0.0
@@ -560,6 +568,23 @@ class SlackStreamingResponder:
             except Exception:
                 logger.debug("slack set_status failed", exc_info=True)
 
+        try:
+            kwargs: dict = {
+                "channel": self._channel_id,
+                "thread_ts": self._thread_ts,
+            }
+            if self._user_id:
+                kwargs["recipient_user_id"] = self._user_id
+            if self._team_id:
+                kwargs["recipient_team_id"] = self._team_id
+            response = await self._client.chat_startStream(**kwargs)
+            stream_ts = response.get("ts") if isinstance(response, dict) else None
+            if stream_ts:
+                self._stream_ts = str(stream_ts)
+                return
+        except Exception:
+            logger.debug("slack startStream failed, using fallback", exc_info=True)
+
         response = await self._client.chat_postMessage(
             channel=self._channel_id,
             text=initial,
@@ -567,6 +592,13 @@ class SlackStreamingResponder:
         )
         message = response.get("message", {}) if isinstance(response, dict) else {}
         self._fallback_ts = str(message.get("ts") or response.get("ts") or "")
+
+    async def _clear_status(self) -> None:
+        if self._set_status is not None:
+            try:
+                await self._set_status("")
+            except Exception:
+                logger.debug("slack clear set_status failed", exc_info=True)
 
     async def keep_status_alive(self, stop_event: asyncio.Event) -> None:
         interval = 2.5
@@ -603,6 +635,13 @@ class SlackStreamingResponder:
         if not self._delta_received:
             self._delta_received = True
 
+        if self._stream_ts:
+            self._pending_delta += delta
+            now = time.monotonic()
+            if now - self._last_update >= self._throttle_seconds:
+                await self._flush_stream()
+            return
+
         now = time.monotonic()
         if now - self._last_update < self._throttle_seconds:
             return
@@ -610,10 +649,54 @@ class SlackStreamingResponder:
         self._last_update = now
 
     async def finish(self, text: str) -> None:
-        await self._fallback_update(self._format_text(text.strip() or "(no response)"))
+        final_text = self._format_text(text.strip() or "(no response)")
+        if self._stream_ts:
+            if self._pending_delta:
+                await self._flush_stream(force=True)
+            try:
+                await self._client.chat_stopStream(
+                    channel=self._channel_id,
+                    ts=self._stream_ts,
+                    markdown_text=final_text,
+                )
+                await self._clear_status()
+                return
+            except Exception:
+                logger.exception("slack stopStream failed, using fallback")
+        await self._fallback_update(final_text)
+        await self._clear_status()
 
     async def error(self, text: str) -> None:
+        if self._stream_ts:
+            try:
+                await self._client.chat_stopStream(
+                    channel=self._channel_id,
+                    ts=self._stream_ts,
+                    markdown_text=f":x: {text}",
+                )
+                await self._clear_status()
+                return
+            except Exception:
+                logger.exception("slack stopStream error failed, using fallback")
         await self._fallback_update(f":x: {text}")
+        await self._clear_status()
+
+    async def _flush_stream(self, *, force: bool = False) -> None:
+        if not self._stream_ts or not self._pending_delta:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_update < self._throttle_seconds:
+            return
+        try:
+            await self._client.chat_appendStream(
+                channel=self._channel_id,
+                ts=self._stream_ts,
+                markdown_text=self._pending_delta,
+            )
+            self._pending_delta = ""
+            self._last_update = now
+        except Exception:
+            logger.exception("slack appendStream failed")
 
     async def _fallback_update(self, text: str) -> None:
         if not self._fallback_ts:

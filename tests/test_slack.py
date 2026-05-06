@@ -76,6 +76,9 @@ class _FakeSlackClient:
         self.updates: list[dict] = []
         self.deletes: list[dict] = []
         self.api_calls: list[tuple[str, dict]] = []
+        self.stream_starts: list[dict] = []
+        self.stream_appends: list[dict] = []
+        self.stream_stops: list[dict] = []
 
     async def chat_postMessage(self, **kwargs):
         self.posts.append(kwargs)
@@ -89,10 +92,20 @@ class _FakeSlackClient:
         self.deletes.append(kwargs)
         return {"ok": True}
 
+    async def chat_startStream(self, **kwargs):
+        self.stream_starts.append(kwargs)
+        return {"ok": True, "ts": "stream.1"}
+
+    async def chat_appendStream(self, **kwargs):
+        self.stream_appends.append(kwargs)
+        return {"ok": True}
+
+    async def chat_stopStream(self, **kwargs):
+        self.stream_stops.append(kwargs)
+        return {"ok": True}
+
     async def api_call(self, api_method: str, *, json: dict):
         self.api_calls.append((api_method, json))
-        if api_method == "chat.startStream":
-            return {"ok": True, "ts": "stream.1"}
         return {"ok": True, "ts": json.get("ts", "stream.1")}
 
 
@@ -298,11 +311,14 @@ async def test_slack_client_streams_reply_in_thread_with_native_stream(
     )
 
     say.assert_not_awaited()
-    assert len(client.posts) == 1
-    assert client.posts[0]["channel"] == "D1"
-    assert "thinking" in client.posts[0]["text"]
-    assert client.api_calls == []
-    assert any("dummy:hello" in u.get("text", "") for u in client.updates)
+    assert len(client.stream_starts) == 1
+    assert client.stream_starts[0]["channel"] == "D1"
+    assert client.stream_starts[0]["thread_ts"] == "1000.1"
+    assert client.stream_starts[0].get("recipient_user_id") == "U1"
+    assert len(client.stream_stops) == 1
+    assert client.stream_stops[0]["channel"] == "D1"
+    assert client.stream_stops[0]["ts"] == "stream.1"
+    assert "dummy:hello" in client.stream_stops[0].get("markdown_text", "")
 
 
 @pytest.mark.anyio
