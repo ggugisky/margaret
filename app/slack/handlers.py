@@ -399,25 +399,19 @@ class SlackDMHandler:
             await say(text=reply_text, thread_ts=ctx.thread_ts)
             return
 
-        stop_typing = asyncio.Event()
-        typing_task = asyncio.create_task(
-            self._keep_typing(
-                client=client,
-                channel_id=ctx.channel_id,
-                thread_ts=ctx.thread_ts,
-                stop_event=stop_typing,
-            )
+        responder = SlackStreamingResponder(
+            client=client,
+            channel_id=ctx.channel_id,
+            thread_ts=ctx.thread_ts,
+            set_status=set_status,
+            label=label,
         )
+        await responder.start()
+
+        stop_status = asyncio.Event()
+        status_task = asyncio.create_task(responder.keep_status_alive(stop_status))
 
         try:
-            responder = SlackStreamingResponder(
-                client=client,
-                channel_id=ctx.channel_id,
-                thread_ts=ctx.thread_ts,
-                set_status=set_status,
-                label=label,
-            )
-            await responder.start()
             reply_text = await self._run_agent_turn(
                 session_id=session_id,
                 text=text,
@@ -428,26 +422,8 @@ class SlackDMHandler:
             else:
                 await responder.finish(reply_text)
         finally:
-            stop_typing.set()
-            await typing_task
-
-    @staticmethod
-    async def _keep_typing(
-        *,
-        client: Any,
-        channel_id: str,
-        thread_ts: str,
-        stop_event: asyncio.Event,
-    ) -> None:
-        while not stop_event.is_set():
-            try:
-                await client.typing(channel=channel_id, thread_ts=thread_ts)
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=3.0)
-            except asyncio.TimeoutError:
-                pass
+            stop_status.set()
+            await status_task
 
     async def _run_agent_turn(
         self,
@@ -569,14 +545,20 @@ class SlackStreamingResponder:
         self._fallback_ts: str | None = None
         self._pending_delta = ""
         self._last_update = 0.0
+        self._delta_received = False
+        self._started_at = 0.0
+
+    def _status_text(self) -> str:
+        elapsed = int(time.monotonic() - self._started_at) if self._started_at else 0
+        base = f"⏳ {self._label} is thinking" if self._label else "⏳ thinking"
+        return f"{base} ({elapsed}s)" if elapsed else base
 
     async def start(self) -> None:
-        status_text = (
-            f"_{self._label} is thinking..._" if self._label else "_thinking..._"
-        )
+        self._started_at = time.monotonic()
+        initial = self._status_text()
         if self._set_status is not None:
             try:
-                await self._set_status(status_text)
+                await self._set_status(initial)
             except Exception:
                 logger.debug("slack set_status failed", exc_info=True)
 
@@ -594,15 +576,56 @@ class SlackStreamingResponder:
 
         response = await self._client.chat_postMessage(
             channel=self._channel_id,
-            text=status_text,
+            text=initial,
             thread_ts=self._thread_ts,
         )
         message = response.get("message", {}) if isinstance(response, dict) else {}
         self._fallback_ts = str(message.get("ts") or response.get("ts") or "")
 
+    async def keep_status_alive(self, stop_event: asyncio.Event) -> None:
+        interval = 2.5
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(stop_event.wait()), timeout=interval
+                )
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self._delta_received:
+                continue
+            status = self._status_text()
+            if self._set_status is not None:
+                try:
+                    await self._set_status(status)
+                except Exception:
+                    pass
+            if self._fallback_ts:
+                try:
+                    await self._client.chat_update(
+                        channel=self._channel_id,
+                        ts=self._fallback_ts,
+                        text=status,
+                    )
+                except Exception:
+                    pass
+
     async def append(self, delta: str, full_text: str) -> None:
         if not delta:
             return
+
+        if not self._delta_received:
+            self._delta_received = True
+            if self._fallback_ts:
+                try:
+                    await self._client.chat_update(
+                        channel=self._channel_id,
+                        ts=self._fallback_ts,
+                        text=self._format_text(full_text) or "…",
+                    )
+                    self._last_update = time.monotonic()
+                except Exception:
+                    logger.exception("slack first fallback update failed")
 
         if self._stream_ts:
             self._pending_delta += delta
