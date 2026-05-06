@@ -4,6 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.adapters import (
     AdapterState,
+    _CLI_STREAM_LIMIT,
     CodexAgentAdapter,
     OpenCodeAgentAdapter,
     ClaudeCodeAgentAdapter,
@@ -66,6 +67,24 @@ async def test_codex_adapter_emits_progress_events():
     assert [event.type for event in events] == ["thinking_delta", "delta"]
     assert "tool_call" in events[0].data["delta"]
     assert events[1].data["delta"] == "done"
+
+
+@pytest.mark.anyio
+async def test_codex_adapter_uses_large_stream_limit():
+    adapter = CodexAgentAdapter()
+    lines = [
+        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ) as mock_exec:
+        deltas = []
+        async for delta in adapter.stream_reply("ses_test", "hello", "gpt-5.5"):
+            deltas.append(delta)
+
+    assert "".join(deltas) == "ok"
+    assert mock_exec.call_args.kwargs["limit"] == _CLI_STREAM_LIMIT
 
 
 @pytest.mark.anyio

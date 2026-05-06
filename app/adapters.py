@@ -11,6 +11,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# CLI agents stream JSONL. Tool results can be a single very large JSON line, and
+# asyncio's default 64 KiB StreamReader limit raises LimitOverrunError on readline.
+_CLI_STREAM_LIMIT = 16 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class ModelInfo:
@@ -250,6 +254,7 @@ class CodexAgentAdapter(AgentAdapter):
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -381,6 +386,7 @@ class OpenCodeAgentAdapter(AgentAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -499,6 +505,7 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -614,6 +621,7 @@ class CopilotAgentAdapter(AgentAdapter):
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
