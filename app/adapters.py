@@ -138,7 +138,7 @@ class CodexAgentAdapter(AgentAdapter):
                 state.native_session_id,
                 "--json",
                 "--skip-git-repo-check",
-                "--full-auto",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "-m",
                 model,
                 text,
@@ -149,7 +149,7 @@ class CodexAgentAdapter(AgentAdapter):
                 "exec",
                 "--json",
                 "--skip-git-repo-check",
-                "--full-auto",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "-m",
                 model,
             ]

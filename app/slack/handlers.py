@@ -651,14 +651,15 @@ class SlackStreamingResponder:
     async def finish(self, text: str) -> None:
         final_text = self._format_text(text.strip() or "(no response)")
         if self._stream_ts:
+            stop_kwargs: dict = {
+                "channel": self._channel_id,
+                "ts": self._stream_ts,
+            }
             if self._pending_delta:
-                await self._flush_stream(force=True)
+                stop_kwargs["markdown_text"] = self._pending_delta
+                self._pending_delta = ""
             try:
-                await self._client.chat_stopStream(
-                    channel=self._channel_id,
-                    ts=self._stream_ts,
-                    markdown_text=final_text,
-                )
+                await self._client.chat_stopStream(**stop_kwargs)
                 await self._clear_status()
                 return
             except Exception:

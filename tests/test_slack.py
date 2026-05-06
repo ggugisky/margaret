@@ -318,7 +318,6 @@ async def test_slack_client_streams_reply_in_thread_with_native_stream(
     assert len(client.stream_stops) == 1
     assert client.stream_stops[0]["channel"] == "D1"
     assert client.stream_stops[0]["ts"] == "stream.1"
-    assert "dummy:hello" in client.stream_stops[0].get("markdown_text", "")
 
 
 @pytest.mark.anyio
