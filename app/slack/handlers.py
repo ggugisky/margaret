@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -388,27 +389,65 @@ class SlackDMHandler:
         client: Any | None,
         set_status: Any | None = None,
     ) -> None:
+        session = self._store.get_session(session_id)
+        agent_id = str(session["agent_id"]) if session else "?"
+        model_id = str(session.get("model_id") or "default") if session else "?"
+        label = f"`{agent_id}` / `{model_id}`"
+
         if client is None:
             reply_text = await self._run_agent_turn(session_id=session_id, text=text)
             await say(text=reply_text, thread_ts=ctx.thread_ts)
             return
 
-        responder = SlackStreamingResponder(
-            client=client,
-            channel_id=ctx.channel_id,
-            thread_ts=ctx.thread_ts,
-            set_status=set_status,
+        stop_typing = asyncio.Event()
+        typing_task = asyncio.create_task(
+            self._keep_typing(
+                client=client,
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                stop_event=stop_typing,
+            )
         )
-        await responder.start()
-        reply_text = await self._run_agent_turn(
-            session_id=session_id,
-            text=text,
-            on_delta=responder.append,
-        )
-        if reply_text.startswith("[margaret error]"):
-            await responder.error(reply_text)
-        else:
-            await responder.finish(reply_text)
+
+        try:
+            responder = SlackStreamingResponder(
+                client=client,
+                channel_id=ctx.channel_id,
+                thread_ts=ctx.thread_ts,
+                set_status=set_status,
+                label=label,
+            )
+            await responder.start()
+            reply_text = await self._run_agent_turn(
+                session_id=session_id,
+                text=text,
+                on_delta=responder.append,
+            )
+            if reply_text.startswith("[margaret error]"):
+                await responder.error(reply_text)
+            else:
+                await responder.finish(reply_text)
+        finally:
+            stop_typing.set()
+            await typing_task
+
+    @staticmethod
+    async def _keep_typing(
+        *,
+        client: Any,
+        channel_id: str,
+        thread_ts: str,
+        stop_event: asyncio.Event,
+    ) -> None:
+        while not stop_event.is_set():
+            try:
+                await client.typing(channel=channel_id, thread_ts=thread_ts)
+            except Exception:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.shield(stop_event.wait()), timeout=3.0)
+            except asyncio.TimeoutError:
+                pass
 
     async def _run_agent_turn(
         self,
@@ -518,21 +557,26 @@ class SlackStreamingResponder:
         thread_ts: str,
         throttle_seconds: float = 0.3,
         set_status: Any | None = None,
+        label: str = "",
     ) -> None:
         self._client = client
         self._channel_id = channel_id
         self._thread_ts = thread_ts
         self._throttle_seconds = throttle_seconds
         self._set_status = set_status
+        self._label = label
         self._stream_ts: str | None = None
         self._fallback_ts: str | None = None
         self._pending_delta = ""
         self._last_update = 0.0
 
     async def start(self) -> None:
+        status_text = (
+            f"_{self._label} is thinking..._" if self._label else "_thinking..._"
+        )
         if self._set_status is not None:
             try:
-                await self._set_status("is thinking...")
+                await self._set_status(status_text)
             except Exception:
                 logger.debug("slack set_status failed", exc_info=True)
 
@@ -550,7 +594,7 @@ class SlackStreamingResponder:
 
         response = await self._client.chat_postMessage(
             channel=self._channel_id,
-            text="...",
+            text=status_text,
             thread_ts=self._thread_ts,
         )
         message = response.get("message", {}) if isinstance(response, dict) else {}
