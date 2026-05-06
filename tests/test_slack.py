@@ -298,20 +298,11 @@ async def test_slack_client_streams_reply_in_thread_with_native_stream(
     )
 
     say.assert_not_awaited()
-    assert client.posts == []
-    assert client.deletes == []
-    assert client.api_calls[0] == (
-        "chat.startStream",
-        {"channel": "D1", "thread_ts": "1000.1"},
-    )
-    assert client.api_calls[1] == (
-        "chat.appendStream",
-        {"channel": "D1", "ts": "stream.1", "markdown_text": "dummy:hello"},
-    )
-    assert client.api_calls[-1] == (
-        "chat.stopStream",
-        {"channel": "D1", "ts": "stream.1"},
-    )
+    assert len(client.posts) == 1
+    assert client.posts[0]["channel"] == "D1"
+    assert "thinking" in client.posts[0]["text"]
+    assert client.api_calls == []
+    assert any("dummy:hello" in u.get("text", "") for u in client.updates)
 
 
 @pytest.mark.anyio

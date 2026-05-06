@@ -169,6 +169,7 @@ class CodexAgentAdapter(AgentAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            cwd=workspace_path,
         )
 
         try:
