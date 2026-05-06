@@ -298,10 +298,8 @@ async def test_slack_client_streams_reply_in_thread_with_native_stream(
     )
 
     say.assert_not_awaited()
-    assert client.posts == [
-        {"channel": "D1", "text": "생각 중...", "thread_ts": "1000.1"}
-    ]
-    assert client.deletes == [{"channel": "D1", "ts": "posted.1"}]
+    assert client.posts == []
+    assert client.deletes == []
     assert client.api_calls[0] == (
         "chat.startStream",
         {"channel": "D1", "thread_ts": "1000.1"},

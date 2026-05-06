@@ -65,13 +65,14 @@ class SlackIntegration:
             await say("무엇을 도와드릴까요?")
 
         @assistant.user_message
-        async def _on_assistant_user_message(event, say, body, client):  # noqa: ANN001
+        async def _on_assistant_user_message(event, say, body, client, set_status):  # noqa: ANN001
             team_id = (body.get("team_id") if isinstance(body, dict) else None) or ""
             await self._handler_logic.handle_message(
                 event=event,
                 team_id=team_id,
                 say=say,
                 client=client,
+                set_status=set_status,
             )
 
         app.assistant(assistant)
