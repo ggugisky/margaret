@@ -26,6 +26,16 @@ class Settings:
             "yes",
             "on",
         }
+        self.rag_enabled: bool = os.getenv("MARGARET_RAG_ENABLED", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.rag_working_dir: str = os.getenv(
+            "MARGARET_RAG_DIR",
+            str(Path.home() / ".margaret" / "rag"),
+        )
 
 
 settings = Settings()
