@@ -48,6 +48,27 @@ async def test_codex_adapter_parsing():
 
 
 @pytest.mark.anyio
+async def test_codex_adapter_emits_progress_events():
+    adapter = CodexAgentAdapter()
+    lines = [
+        '{"type":"thread.started","thread_id":"codex-thread-1"}',
+        '{"type":"item.completed","item":{"type":"tool_call","name":"shell","arguments":"ls"}}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ):
+        events = []
+        async for event in adapter.stream_reply_events("ses_test", "hello", "gpt-5.5"):
+            events.append(event)
+
+    assert [event.type for event in events] == ["thinking_delta", "delta"]
+    assert "tool_call" in events[0].data["delta"]
+    assert events[1].data["delta"] == "done"
+
+
+@pytest.mark.anyio
 async def test_opencode_adapter_parsing():
     adapter = OpenCodeAgentAdapter()
     state = AdapterState()

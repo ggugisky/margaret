@@ -11,6 +11,7 @@ POST /sessions
 GET  /sessions?days=7
 GET  /sessions/{session_id}/history?limit=10&before_ts=...
 POST /sessions/{session_id}/messages/stream
+WS   /ws
 ```
 
 ## Agent And Model Contract
@@ -60,6 +61,19 @@ The response includes a `has_native_binding` field:
 ```
 
 Adapters such as OpenCode can set `requires_model=true` so clients must choose a model before creating a session.
+
+## Phone WebSocket Bridge
+
+`WS /ws` is a text-only compatibility bridge for the existing `margaret-voice`
+phone protocol. It creates or resumes Gateway sessions and maps Gateway stream
+events to phone events:
+
+- `delta` -> `text_delta`
+- `done` -> `tts_done`, `done`
+- `error` -> `error`
+
+When `MARGARET_GATEWAY_TOKEN` is set, WebSocket clients can authenticate with
+either `Authorization: Bearer <token>` or `/ws?token=<token>`.
 
 ## Session Persistence
 

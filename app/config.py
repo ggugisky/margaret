@@ -17,6 +17,22 @@ class Settings:
             str(Path.home() / ".margaret" / "gateway.sqlite3"),
         )
         self.gateway_token: str = os.getenv("MARGARET_GATEWAY_TOKEN", "")
+        self.voice_app_secret: str = os.getenv("VOICE_APP_SECRET", "")
+        self.voice_jwt_secret: str = os.getenv(
+            "VOICE_JWT_SECRET",
+            self.gateway_token or self.voice_app_secret,
+        )
+        self.voice_msg_hmac_key: str = os.getenv("VOICE_MSG_HMAC_KEY", "")
+        self.voice_workspace_root: str = os.getenv(
+            "VOICE_WORKSPACE_ROOT", "/workspace"
+        )
+        self.voice_workspace_name: str = os.getenv("VOICE_WORKSPACE_NAME", "")
+        self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+        self.elevenlabs_api_key: str = os.getenv("ELEVENLABS_API_KEY", "")
+        self.elevenlabs_voice_id: str = os.getenv(
+            "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"
+        )
+        self.default_tts_provider: str = os.getenv("TTS_PROVIDER", "openai-hd")
         self.default_agent: str = os.getenv("MARGARET_DEFAULT_AGENT", "echo")
         self.slack_app_token: str = os.getenv("SLACK_APP_TOKEN", "")
         self.slack_bot_token: str = os.getenv("SLACK_BOT_TOKEN", "")

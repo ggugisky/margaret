@@ -19,6 +19,7 @@ def test_health() -> None:
 def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
     test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main.settings, "slack_enabled", False)
 
     with TestClient(main.app) as client:
         resp = client.get("/slack/status")
@@ -52,7 +53,9 @@ def test_create_session_and_history(tmp_path, monkeypatch) -> None:
         assert created.status_code == 200
         created_payload = created.json()
         session_id = created_payload["session_id"]
+        assert created_payload["session_key"] == session_id
         assert created_payload["model_id"] == "echo/default"
+        assert created_payload["source_label"] == "test"
 
         streamed = client.post(
             f"/sessions/{session_id}/messages/stream",

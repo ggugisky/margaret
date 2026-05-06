@@ -151,6 +151,12 @@ class Store:
             )
         return self.get_session(session_id) or {}
 
+    def _decorate_session(self, session: dict[str, Any]) -> dict[str, Any]:
+        decorated = dict(session)
+        decorated["session_key"] = decorated.get("session_id")
+        decorated["source_label"] = decorated.get("client") or "unknown"
+        return decorated
+
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -171,7 +177,7 @@ class Store:
                 """,
                 (session_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._decorate_session(dict(row)) if row else None
 
     def list_sessions(self, updated_after: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
@@ -194,7 +200,7 @@ class Store:
                 """,
                 (updated_after,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._decorate_session(dict(row)) for row in rows]
 
     def append_event(self, session_id: str, role: str, content: str) -> dict[str, Any]:
         now = utc_now()

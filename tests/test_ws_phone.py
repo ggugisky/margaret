@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+import app.main as main
+from app.store import Store
+from app.voice.service import TtsChunk
+
+
+def _receive_until(ws, expected_type: str, limit: int = 30) -> list[dict]:
+    messages: list[dict] = []
+    for _ in range(limit):
+        msg = ws.receive_json()
+        messages.append(msg)
+        if msg.get("type") == expected_type:
+            return messages
+    raise AssertionError(f"Did not receive {expected_type}: {messages}")
+
+
+def test_e2e_ws_phone_ok(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_phone.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "slack_enabled", False)
+    monkeypatch.setattr(main.settings, "default_tts_provider", "off")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            connected = ws.receive_json()
+            assert connected["type"] == "connected"
+            assert connected["session_key"].startswith("margaret:")
+            assert connected["available_backends"] == ["margaret-gateway"]
+            assert connected["current_model"] == "echo/default"
+
+            ws.send_json({"type": "ping"})
+            assert ws.receive_json() == {"type": "pong"}
+
+            ws.send_json({"type": "text_message", "text": "phone hello"})
+            messages = _receive_until(ws, "done", limit=50)
+
+    message_types = [msg["type"] for msg in messages]
+    assert message_types[:3] == ["ack", "process_step", "thinking"]
+    assert "text_delta" in message_types
+    assert "tts_done" in message_types
+    assert messages[-1]["text"].endswith("phone hello")
+
+    history = test_store.get_history(connected["session_key"], limit=10)
+    assert [item["role"] for item in history] == ["user", "assistant"]
+
+
+def test_ws_rejects_when_token_required(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_auth.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "slack_enabled", False)
+    monkeypatch.setattr(main.settings, "gateway_token", "secret-token")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "secret-token")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            msg = ws.receive_json()
+            assert msg == {"type": "error", "message": "Unauthorized"}
+
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+
+
+def test_ws_accepts_query_token_when_required(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_auth_ok.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "slack_enabled", False)
+    monkeypatch.setattr(main.settings, "gateway_token", "secret-token")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "secret-token")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws?token=secret-token") as ws:
+            assert ws.receive_json()["type"] == "connected"
+
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+
+
+def test_ws_text_message_emits_tts_chunk(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_tts.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "openai-hd")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    class FakeVoiceService:
+        def __init__(self, settings) -> None:
+            pass
+
+        async def synthesize_chunks(self, text, preferred_provider, voice):
+            return [TtsChunk(audio="ZHVtbXk=", provider="fake", text=text)]
+
+    monkeypatch.setattr(main, "VoiceService", FakeVoiceService)
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "text_message", "text": "phone hello"})
+            messages = _receive_until(ws, "done", limit=50)
+
+    message_types = [msg["type"] for msg in messages]
+    assert "tts_chunk" in message_types
+    tts_chunk = next(msg for msg in messages if msg["type"] == "tts_chunk")
+    assert tts_chunk["audio"] == "ZHVtbXk="
+    assert tts_chunk["provider"] == "fake"
+
+
+def test_ws_text_message_passes_location_context_to_agent(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_location.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "off")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            connected = ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "text_message",
+                    "text": "nearby coffee?",
+                    "location": {"lat": 37.5, "lng": 127.0, "accuracy": 12},
+                }
+            )
+            messages = _receive_until(ws, "done", limit=50)
+
+    assert "Voice GPS context" in messages[-1]["text"]
+    assert "latitude: 37.5" in messages[-1]["text"]
+    assert "accuracy_m: 12" in messages[-1]["text"]
+    history = test_store.get_history(connected["session_key"], limit=10)
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "nearby coffee?"
+
+
+def test_ws_audio_commit_runs_stt_and_tts(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_audio.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "openai-hd")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    class FakeVoiceService:
+        def __init__(self, settings) -> None:
+            self.audio_seen = b""
+
+        async def speech_to_text(self, audio_bytes, **kwargs):
+            self.audio_seen = audio_bytes
+            return "audio hello"
+
+        async def synthesize_chunks(self, text, preferred_provider, voice):
+            return [TtsChunk(audio="ZHVtbXk=", provider="fake", text=text)]
+
+    monkeypatch.setattr(main, "VoiceService", FakeVoiceService)
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            connected = ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "audio_chunk",
+                    "audio": "ZHVtbXk=",
+                    "fileExt": "m4a",
+                    "mimeType": "audio/mp4",
+                }
+            )
+            ws.send_json({"type": "audio_commit"})
+            messages = _receive_until(ws, "done")
+
+    message_types = [msg["type"] for msg in messages]
+    assert "tts_chunk" in message_types
+    history = test_store.get_history(connected["session_key"], limit=10)
+    assert history[0]["role"] == "user"
+    assert history[0]["content"] == "audio hello"
+
+
+def test_ws_new_session_uses_workspace_name(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_workspace.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "off")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+    monkeypatch.setattr(main.settings, "voice_workspace_root", "/workspace")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "new_session",
+                    "model": "echo/default",
+                    "workspace_name": "ggugisky",
+                }
+            )
+            msg = ws.receive_json()
+
+    assert msg["type"] == "session_created"
+    session = test_store.get_session(msg["session_key"])
+    assert session is not None
+    assert session["client"] == "voice"
+    assert session["workspace_path"] == "/workspace/ggugisky"

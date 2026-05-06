@@ -27,6 +27,7 @@
 - agent/model selection 계약 반영
 - session에 `model_id` 저장
 - adapter 호출 시 `model_id` 전달
+- `margaret-voice` phone protocol 호환용 `WS /ws` text bridge 구현
 
 ## 파일 구조
 
@@ -47,7 +48,8 @@ margaret/
 │   ├── test_adapters.py
 │   ├── test_concurrency.py
 │   ├── test_gateway.py
-│   └── test_slack.py
+│   ├── test_slack.py
+│   └── test_ws_phone.py
 ├── AGENTS.md
 ├── CONTEXT.md
 ├── DEVELOPMENT.md
@@ -98,7 +100,7 @@ uv run pytest
 현재 확인된 결과:
 
 ```text
-37 passed
+46 passed
 ```
 
 ## 운영 상태

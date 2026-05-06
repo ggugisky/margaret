@@ -7,6 +7,7 @@ import shutil
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,12 @@ class AdapterState:
     native_session_id: str | None = None
 
 
+@dataclass(frozen=True)
+class AgentStreamEvent:
+    type: str
+    data: dict[str, Any]
+
+
 class AgentAdapter(ABC):
     @property
     @abstractmethod
@@ -49,6 +56,23 @@ class AgentAdapter(ABC):
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
         raise NotImplementedError
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        async for delta in self.stream_reply(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            yield AgentStreamEvent("delta", {"delta": delta})
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +128,44 @@ _CODEX_MODELS: tuple[ModelInfo, ...] = (
 _CODEX_DEFAULT_MODEL = "gpt-5.5"
 
 
+def _collect_text_fragments(value: Any) -> list[str]:
+    fragments: list[str] = []
+    if value is None:
+        return fragments
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        for item in value:
+            fragments.extend(_collect_text_fragments(item))
+        return fragments
+    if isinstance(value, dict):
+        for key in ("text", "content", "summary", "output", "message", "command"):
+            if key in value:
+                fragments.extend(_collect_text_fragments(value[key]))
+        return fragments
+    return fragments
+
+
+def _format_codex_progress_item(item: dict[str, Any]) -> str:
+    item_type = str(item.get("type") or "item")
+    if item_type == "agent_message":
+        return ""
+
+    if item_type in {"tool_call", "function_call"}:
+        name = item.get("name") or item.get("tool_name") or item.get("call_id") or "tool"
+        args = item.get("arguments") or item.get("args") or item.get("input") or ""
+        args_text = " ".join(_collect_text_fragments(args)) if not isinstance(args, str) else args
+        return f"[{item_type}] {name} {args_text}".strip()
+
+    text = " ".join(_collect_text_fragments(item))
+    if not text:
+        return ""
+    return f"[{item_type}] {text}".strip()
+
+
 class CodexAgentAdapter(AgentAdapter):
     """Adapter that wraps ``codex exec --json`` (non-interactive JSONL mode)."""
 
@@ -126,6 +188,24 @@ class CodexAgentAdapter(AgentAdapter):
         workspace_path: str | None = None,
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
+        async for event in self.stream_reply_events(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            if event.type == "delta":
+                yield event.data.get("delta", "")
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
         model = model_id or _CODEX_DEFAULT_MODEL
         state = adapter_state or AdapterState()
 
@@ -202,7 +282,17 @@ class CodexAgentAdapter(AgentAdapter):
                 elif etype == "item.completed":
                     item = event.get("item", {})
                     if item.get("type") == "agent_message":
-                        yield item.get("text", "")
+                        yield AgentStreamEvent("delta", {"delta": item.get("text", "")})
+                    else:
+                        progress = _format_codex_progress_item(item)
+                        if progress:
+                            yield AgentStreamEvent(
+                                "thinking_delta",
+                                {
+                                    "delta": progress + "\n",
+                                    "category": item.get("type") or "item",
+                                },
+                            )
 
                 elif etype == "error":
                     raise RuntimeError(event.get("message", "codex error"))
