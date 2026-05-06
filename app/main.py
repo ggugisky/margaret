@@ -241,6 +241,13 @@ async def _stream_session_events(
                     "event": EventResponse(**event).model_dump(),
                 },
             )
+        except asyncio.CancelledError:
+            store.append_event(
+                session_id=session_id,
+                role="error",
+                content="Generation canceled before completion because the client disconnected.",
+            )
+            raise
         except Exception as exc:
             store.append_event(session_id=session_id, role="error", content=str(exc))
             yield ("error", {"message": str(exc)})

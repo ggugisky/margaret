@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi.testclient import TestClient  # pyright: ignore[reportMissingImports]
 
 import json
@@ -398,6 +399,23 @@ class _FailOnceThenSucceedAdapter(AgentAdapter):
         yield "second attempt works"
 
 
+class _SlowCancelAdapter(AgentAdapter):
+    @property
+    def info(self) -> AgentInfo:
+        return AgentInfo(id="slow-cancel", name="SlowCancel", description="")
+
+    async def stream_reply(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ):
+        await asyncio.sleep(60)
+        yield "too late"
+
+
 def test_resume_failure_emits_error_and_preserves_old_binding(
     tmp_path, monkeypatch
 ) -> None:
@@ -480,6 +498,48 @@ def test_capture_before_error_persists_binding_state(tmp_path, monkeypatch) -> N
         binding["adapter_state_json"]
         == '{"native_session_id": "captured-before-error"}'
     )
+
+
+def test_canceled_stream_persists_error_event(tmp_path, monkeypatch) -> None:
+    async def run() -> None:
+        test_store = main.Store(str(tmp_path / "cancel_stream.sqlite3"))
+        monkeypatch.setattr(main, "store", test_store)
+        monkeypatch.setattr(main, "_session_locks", {})
+
+        adapter = _SlowCancelAdapter()
+        adapters = dict(main.registry._adapters)
+        adapters[adapter.info.id] = adapter
+        monkeypatch.setattr(main.registry, "_adapters", adapters)
+
+        session = test_store.create_session(
+            agent_id="slow-cancel",
+            model_id=None,
+            title="Cancel",
+            client="test",
+            workspace_path=None,
+        )
+
+        async def consume() -> None:
+            async for _ in main._stream_session_events(
+                session["session_id"],
+                "long request",
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        history = test_store.get_history(session["session_id"], limit=10)
+        assert [item["role"] for item in history] == ["user", "error"]
+        assert "client disconnected" in history[-1]["content"]
+        assert test_store.get_session(session["session_id"])["status"] == "idle"
+
+    asyncio.run(run())
 
 
 def test_lock_released_after_stream_error_allows_next_request(
