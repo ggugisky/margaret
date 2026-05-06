@@ -12,6 +12,7 @@ class SlackMessageContext:
     thread_ts: str
     message_ts: str
     is_dm: bool = False
+    username: str = ""
 
 
 @dataclass(frozen=True)

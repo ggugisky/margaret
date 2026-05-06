@@ -88,6 +88,7 @@ class SlackDMHandler:
             thread_ts=raw_thread_ts or message_ts,
             message_ts=message_ts,
             is_dm=is_dm_message,
+            username=await self._resolve_username(user_id=user_id, client=client),
         )
 
         existing_session_id = self._store.get_session_id_by_slack_thread(
@@ -249,7 +250,7 @@ class SlackDMHandler:
         model_id: str,
         is_mention: bool = False,
     ) -> str:
-        workspace_path = os.path.join(self._workspace_root, ctx.user_id)
+        workspace_path = os.path.join(self._workspace_root, ctx.username or ctx.user_id)
         os.makedirs(workspace_path, exist_ok=True)
         session = self._store.create_session(
             agent_id=agent_id,
@@ -268,6 +269,22 @@ class SlackDMHandler:
             owner_user_id=ctx.user_id if is_mention else None,
         )
         return session_id
+
+    async def _resolve_username(self, *, user_id: str, client: Any | None) -> str:
+        if not client:
+            return user_id
+        try:
+            result = await client.users_info(user=user_id)
+            name = (
+                result.get("user", {}).get("name")
+                or result.get("user", {}).get("profile", {}).get("display_name")
+                or ""
+            )
+            clean = "".join(c for c in name if c.isalnum() or c in "-_.")
+            return clean or user_id
+        except Exception:
+            logger.warning("slack: failed to resolve username for %s", user_id)
+            return user_id
 
     def _parse_command(self, *, text: str) -> SlackCommand | None:
         tokens = text.split()
