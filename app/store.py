@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,29 @@ class Store:
                     primary key (team_id, user_id)
                 )
                 """
+            )
+            conn.execute(
+                """
+                create table if not exists routes (
+                    route_id text primary key,
+                    title text not null,
+                    start_time text,
+                    end_time text,
+                    duration_sec real,
+                    distance_m real,
+                    step_count integer,
+                    modes_json text not null,
+                    start_lat real,
+                    start_lng real,
+                    end_lat real,
+                    end_lng real,
+                    points_json text not null,
+                    created_at text not null
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_routes_created_at on routes(created_at desc)"
             )
 
     def create_session(
@@ -320,6 +344,85 @@ class Store:
                 "update sessions set status = ?, updated_at = ? where status = ?",
                 ("idle", now, "running"),
             )
+
+    def save_route(self, route: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        route_id = f"route:{uuid.uuid4()}"
+        title = str(route.get("title") or "Route")
+        modes = route.get("modes") if isinstance(route.get("modes"), list) else []
+        points = route.get("points") if isinstance(route.get("points"), list) else []
+        saved = {
+            "route_id": route_id,
+            "title": title,
+            "start_time": route.get("start_time"),
+            "end_time": route.get("end_time"),
+            "duration_sec": route.get("duration_sec"),
+            "distance_m": route.get("distance_m"),
+            "step_count": route.get("step_count"),
+            "modes": modes,
+            "start_lat": route.get("start_lat"),
+            "start_lng": route.get("start_lng"),
+            "end_lat": route.get("end_lat"),
+            "end_lng": route.get("end_lng"),
+            "points": points,
+            "created_at": now,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into routes (
+                    route_id, title, start_time, end_time, duration_sec, distance_m,
+                    step_count, modes_json, start_lat, start_lng, end_lat, end_lng,
+                    points_json, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    route_id,
+                    title,
+                    saved["start_time"],
+                    saved["end_time"],
+                    saved["duration_sec"],
+                    saved["distance_m"],
+                    saved["step_count"],
+                    json.dumps(modes, ensure_ascii=False),
+                    saved["start_lat"],
+                    saved["start_lng"],
+                    saved["end_lat"],
+                    saved["end_lng"],
+                    json.dumps(points, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return saved
+
+    def list_routes(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select route_id, title, start_time, end_time, duration_sec, distance_m,
+                       step_count, modes_json, start_lat, start_lng, end_lat, end_lng,
+                       points_json, created_at
+                from routes
+                order by created_at desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        routes: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["modes"] = json.loads(item.pop("modes_json") or "[]")
+            except json.JSONDecodeError:
+                item["modes"] = []
+            try:
+                item["points"] = json.loads(item.pop("points_json") or "[]")
+            except json.JSONDecodeError:
+                item["points"] = []
+            routes.append(item)
+        return routes
 
     def get_slack_thread_mapping(
         self,

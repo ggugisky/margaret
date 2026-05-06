@@ -25,10 +25,13 @@ from app.models import (
     EventResponse,
     HealthResponse,
     HistoryResponse,
-    SendMessageRequest,
-    SessionResponse,
     SessionsResponse,
     ModelResponse,
+    RouteResponse,
+    RoutesResponse,
+    SaveRouteRequest,
+    SendMessageRequest,
+    SessionResponse,
 )
 from app.security import create_signed_token, verify_signed_token
 from app.store import Store, utc_now
@@ -345,6 +348,23 @@ async def get_history(
         session_id=session_id,
         messages=store.get_history(session_id, limit=limit, before_ts=before_ts),
     )
+
+
+@app.post("/routes", response_model=RouteResponse)
+async def save_route(
+    payload: SaveRouteRequest,
+    _: None = Depends(require_auth),
+) -> RouteResponse:
+    route = store.save_route(payload.model_dump())
+    return RouteResponse(**route)
+
+
+@app.get("/routes", response_model=RoutesResponse)
+async def list_routes(
+    limit: int = 20,
+    _: None = Depends(require_auth),
+) -> RoutesResponse:
+    return RoutesResponse(routes=store.list_routes(limit=limit))
 
 
 @app.post("/sessions/{session_id}/messages/stream")

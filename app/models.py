@@ -69,6 +69,51 @@ class SendMessageRequest(BaseModel):
     location: LocationPayload | None = None
 
 
+class RoutePointPayload(BaseModel):
+    lat: float
+    lng: float
+    ts: int | float | str | None = None
+    speed: float | None = None
+    mode: str | None = None
+    photo_url: str | None = None
+
+
+class SaveRouteRequest(BaseModel):
+    title: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_sec: int | float | None = None
+    distance_m: int | float | None = None
+    step_count: int | None = None
+    modes: list[str] = []
+    start_lat: float | None = None
+    start_lng: float | None = None
+    end_lat: float | None = None
+    end_lng: float | None = None
+    points: list[RoutePointPayload] = []
+
+
+class RouteResponse(BaseModel):
+    route_id: str
+    title: str
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_sec: float | None = None
+    distance_m: float | None = None
+    step_count: int | None = None
+    modes: list[str] = []
+    start_lat: float | None = None
+    start_lng: float | None = None
+    end_lat: float | None = None
+    end_lng: float | None = None
+    points: list[dict] = []
+    created_at: str
+
+
+class RoutesResponse(BaseModel):
+    routes: list[RouteResponse]
+
+
 class AuthRequest(BaseModel):
     secret: str
 

@@ -155,9 +155,67 @@ def test_old_schema_migration(tmp_path) -> None:
         ).fetchall()
     }
     assert "adapter_bindings" in tables
+    assert "routes" in tables
 
     row = conn.execute("select * from sessions where session_id = 'ses_old'").fetchone()
     assert row["title"] == "Old Session"
+    conn.close()
+
+
+def test_routes_api_persists_to_sqlite(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "routes.sqlite3"
+    test_store = main.Store(str(db_path))
+    monkeypatch.setattr(main, "store", test_store)
+
+    route_payload = {
+        "title": "Morning Walk",
+        "start_time": "2026-05-06T10:00:00Z",
+        "end_time": "2026-05-06T10:10:00Z",
+        "duration_sec": 600,
+        "distance_m": 321.5,
+        "step_count": 459,
+        "modes": ["walk"],
+        "start_lat": 37.5,
+        "start_lng": 127.0,
+        "end_lat": 37.501,
+        "end_lng": 127.001,
+        "points": [
+            {"lat": 37.5, "lng": 127.0, "ts": 1778061600000, "mode": "walk"},
+            {
+                "lat": 37.501,
+                "lng": 127.001,
+                "ts": 1778062200000,
+                "speed": 1.2,
+                "mode": "walk",
+                "photo_url": "https://example.test/p.jpg",
+            },
+        ],
+    }
+
+    with TestClient(main.app) as client:
+        created = client.post("/routes", json=route_payload)
+        assert created.status_code == 200
+        created_payload = created.json()
+        assert created_payload["route_id"].startswith("route:")
+        assert created_payload["title"] == "Morning Walk"
+        assert created_payload["points"][1]["photo_url"] == "https://example.test/p.jpg"
+
+        listed = client.get("/routes?limit=20")
+        assert listed.status_code == 200
+        routes = listed.json()["routes"]
+
+    assert len(routes) == 1
+    assert routes[0]["route_id"] == created_payload["route_id"]
+    assert routes[0]["distance_m"] == 321.5
+    assert routes[0]["modes"] == ["walk"]
+    assert routes[0]["points"][0]["lat"] == 37.5
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("select * from routes").fetchone()
+    assert row is not None
+    assert row["title"] == "Morning Walk"
+    assert json.loads(row["points_json"])[1]["photo_url"] == "https://example.test/p.jpg"
     conn.close()
 
 
