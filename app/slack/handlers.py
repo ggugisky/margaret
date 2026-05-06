@@ -111,6 +111,13 @@ class SlackDMHandler:
 
         command = self._parse_command(text=ctx.text)
 
+        if command and command.kind == "agents":
+            await say(
+                text=self._format_agents_message(),
+                thread_ts=ctx.thread_ts,
+            )
+            return
+
         if not is_new_thread and command is not None:
             session = self._store.get_session(existing_session_id)
             agent_id = str(session["agent_id"]) if session else "unknown"
@@ -286,6 +293,25 @@ class SlackDMHandler:
             logger.warning("slack: failed to resolve username for %s", user_id)
             return user_id
 
+    def _format_agents_message(self) -> str:
+        lines: list[str] = ["*Available Agents*\n"]
+        for agent in self._registry.list_agents():
+            default = (
+                f" (default: `{agent.default_model}`)" if agent.default_model else ""
+            )
+            required = " ⚠️ model required" if agent.requires_model else ""
+            lines.append(f"• *{agent.id}*{required}{default}")
+            for model in agent.models:
+                lines.append(
+                    f"  ‣ `{model.id}` — {model.description}"
+                    if model.description
+                    else f"  ‣ `{model.id}`"
+                )
+        lines.append(
+            "\n_Usage: `@bot <agent> <model> [prompt]` or `@bot default <agent> <model>`_"
+        )
+        return "\n".join(lines)
+
     def _parse_command(self, *, text: str) -> SlackCommand | None:
         tokens = text.split()
         if not tokens:
@@ -299,6 +325,9 @@ class SlackDMHandler:
             return None
 
         head = core[0]
+        if head == "agents":
+            return SlackCommand(kind="agents")
+
         if head == "default":
             if len(core) != 3:
                 return None
