@@ -175,22 +175,30 @@ class PhoneVoiceWebSocketHandler:
                     final_text = data.get("text", "")
                     await send({"type": "process_step", "step": "tts_start"})
                     if tts_provider != "off":
-                        chunks = await self.voice_service.synthesize_chunks(
-                            final_text, tts_provider, tts_voice
-                        )
-                        total = len(chunks)
-                        for index, chunk in enumerate(chunks):
-                            payload = {
-                                "type": "tts_chunk",
-                                "audio": chunk.audio,
-                                "index": index,
-                                "total": total,
-                                "text": chunk.text,
-                                "provider": chunk.provider,
-                            }
-                            if index == 0:
-                                payload["full_text"] = final_text
-                            await send(payload)
+                        try:
+                            chunks = await self.voice_service.synthesize_chunks(
+                                final_text, tts_provider, tts_voice
+                            )
+                            total = len(chunks)
+                            for index, chunk in enumerate(chunks):
+                                payload = {
+                                    "type": "tts_chunk",
+                                    "audio": chunk.audio,
+                                    "index": index,
+                                    "total": total,
+                                    "text": chunk.text,
+                                    "provider": chunk.provider,
+                                }
+                                if index == 0:
+                                    payload["full_text"] = final_text
+                                await send(payload)
+                        except Exception as exc:
+                            await send(
+                                {
+                                    "type": "error",
+                                    "message": f"TTS 오류: {exc}",
+                                }
+                            )
                     await send({"type": "tts_done", "text": final_text})
                     await send({"type": "done", "text": final_text})
                 elif event_type == "error":
@@ -340,11 +348,15 @@ class PhoneVoiceWebSocketHandler:
                     chunks = audio_chunks[:]
                     audio_chunks.clear()
                     await send({"type": "process_step", "step": "stt_start"})
-                    user_text = await self.voice_service.speech_to_text(
-                        b"".join(chunks),
-                        file_ext=audio_file_ext,
-                        mime_type=audio_mime_type,
-                    )
+                    try:
+                        user_text = await self.voice_service.speech_to_text(
+                            b"".join(chunks),
+                            file_ext=audio_file_ext,
+                            mime_type=audio_mime_type,
+                        )
+                    except Exception as exc:
+                        await send({"type": "error", "message": f"STT 오류: {exc}"})
+                        continue
                     if not user_text.strip():
                         await send({"type": "no_request", "message": "음성이 비어 있습니다"})
                         continue

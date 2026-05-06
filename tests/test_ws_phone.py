@@ -173,6 +173,41 @@ def test_ws_text_message_emits_tts_chunk(tmp_path, monkeypatch) -> None:
     assert tts_chunk["provider"] == "fake"
 
 
+def test_ws_text_message_returns_text_when_tts_fails(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_tts_failure.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "openai-hd")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    class FakeVoiceService:
+        def __init__(self, settings) -> None:
+            pass
+
+        async def synthesize_chunks(self, text, preferred_provider, voice):
+            raise RuntimeError("insufficient_quota")
+
+    monkeypatch.setattr(main, "VoiceService", FakeVoiceService)
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "text_message", "text": "phone hello"})
+            messages = _receive_until(ws, "done", limit=50)
+
+    message_types = [msg["type"] for msg in messages]
+    assert "error" in message_types
+    assert next(msg for msg in messages if msg["type"] == "error")["message"].startswith(
+        "TTS 오류:"
+    )
+    assert messages[-1]["type"] == "done"
+    assert messages[-1]["text"].endswith("phone hello")
+
+
 def test_ws_text_message_passes_location_context_to_agent(tmp_path, monkeypatch) -> None:
     test_store = Store(str(tmp_path / "ws_location.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)
@@ -255,6 +290,46 @@ def test_ws_audio_commit_runs_stt_and_tts(tmp_path, monkeypatch) -> None:
     history = test_store.get_history(session_key, limit=10)
     assert history[0]["role"] == "user"
     assert history[0]["content"] == "audio hello"
+
+
+def test_ws_audio_commit_stt_failure_keeps_socket_open(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_stt_failure.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "echo")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "off")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+
+    class FakeVoiceService:
+        def __init__(self, settings) -> None:
+            pass
+
+        async def speech_to_text(self, audio_bytes, **kwargs):
+            raise RuntimeError("insufficient_quota")
+
+    monkeypatch.setattr(main, "VoiceService", FakeVoiceService)
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            ws.send_json(
+                {
+                    "type": "audio_chunk",
+                    "audio": "ZHVtbXk=",
+                    "fileExt": "m4a",
+                    "mimeType": "audio/mp4",
+                }
+            )
+            ws.send_json({"type": "audio_commit"})
+            messages = _receive_until(ws, "error", limit=10)
+            ws.send_json({"type": "ping"})
+            pong = ws.receive_json()
+
+    assert messages[-1]["message"].startswith("STT 오류:")
+    assert pong == {"type": "pong"}
 
 
 def test_ws_new_session_uses_workspace_name(tmp_path, monkeypatch) -> None:
