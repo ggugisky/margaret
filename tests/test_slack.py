@@ -109,6 +109,18 @@ class _FakeSlackClient:
         return {"ok": True, "ts": json.get("ts", "stream.1")}
 
 
+class _FakeRagMemory:
+    def __init__(self) -> None:
+        self.queries: list[tuple[str, str]] = []
+
+    async def search(self, query: str, mode: str = "hybrid") -> str:
+        self.queries.append((query, mode))
+        return f"memory:{query}:{mode}"
+
+    async def index_event(self, session_id: str, role: str, content: str) -> None:
+        return None
+
+
 def test_settings_slack_enabled_parsing(monkeypatch) -> None:
     monkeypatch.setenv("SLACK_ENABLED", "true")
     monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-test")
@@ -809,6 +821,65 @@ async def test_agents_command_returns_list_without_session(tmp_path) -> None:
         assert "codex" in reply
         assert "Available Agents" in reply
 
+    assert store.list_sessions("1970-01-01T00:00:00+00:00") == []
+
+
+@pytest.mark.anyio
+async def test_memory_command_searches_rag_without_session(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_memory_cmd.sqlite3"))
+    rag = _FakeRagMemory()
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+        workspace_root=str(tmp_path / "ws"),
+        rag_memory=rag,
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "im",
+            "channel": "D1",
+            "user": "U1",
+            "ts": "6100.1",
+            "text": "memory RAG 계획",
+        },
+        say=say,
+    )
+
+    assert rag.queries == [("RAG 계획", "hybrid")]
+    say.assert_awaited_with(text="memory:RAG 계획:hybrid", thread_ts="6100.1")
+    assert store.list_sessions("1970-01-01T00:00:00+00:00") == []
+
+
+@pytest.mark.anyio
+async def test_memory_command_reports_disabled(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_memory_disabled.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="dummy",
+        workspace_root=str(tmp_path / "ws"),
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "im",
+            "channel": "D1",
+            "user": "U1",
+            "ts": "6101.1",
+            "text": "mem something",
+        },
+        say=say,
+    )
+
+    say.assert_awaited_with(text="RAG memory is not enabled.", thread_ts="6101.1")
     assert store.list_sessions("1970-01-01T00:00:00+00:00") == []
 
 

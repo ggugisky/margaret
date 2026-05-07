@@ -340,6 +340,33 @@ def test_sessions_endpoint_hides_empty_sessions(tmp_path, monkeypatch) -> None:
     assert empty["session_id"] not in {session["session_id"] for session in sessions}
 
 
+def test_memory_search_endpoint_uses_rag_memory(monkeypatch) -> None:
+    class FakeRagMemory:
+        async def search(self, query: str, mode: str = "hybrid") -> str:
+            return f"{mode}:{query}"
+
+    monkeypatch.setattr(main, "rag_memory", FakeRagMemory())
+
+    with TestClient(main.app) as client:
+        resp = client.get("/memory/search", params={"q": "RAG 계획"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "query": "RAG 계획",
+        "mode": "hybrid",
+        "result": "hybrid:RAG 계획",
+    }
+
+
+def test_memory_search_endpoint_requires_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(main, "rag_memory", None)
+
+    with TestClient(main.app) as client:
+        resp = client.get("/memory/search", params={"q": "RAG 계획"})
+
+    assert resp.status_code == 503
+
+
 class _ResumeFailureAdapter(AgentAdapter):
     @property
     def info(self) -> AgentInfo:

@@ -125,6 +125,14 @@ class SlackDMHandler:
             )
             return
 
+        if command and command.kind == "memory":
+            await self._reply_with_memory_search(
+                query=command.query or "",
+                say=say,
+                thread_ts=ctx.thread_ts,
+            )
+            return
+
         if not is_new_thread and command is not None:
             session = self._store.get_session(existing_session_id)
             agent_id = str(session["agent_id"]) if session else "unknown"
@@ -337,6 +345,10 @@ class SlackDMHandler:
         if head == "agents":
             return SlackCommand(kind="agents")
 
+        if head in {"memory", "mem"}:
+            query = " ".join(core[1:]).strip()
+            return SlackCommand(kind="memory", query=query) if query else None
+
         if head == "default":
             if len(core) != 3:
                 return None
@@ -353,6 +365,19 @@ class SlackDMHandler:
             agent_id=core[0],
             model_id=core[1],
             prompt=prompt,
+        )
+
+    async def _reply_with_memory_search(self, *, query: str, say, thread_ts: str) -> None:
+        if not self._rag:
+            await say(
+                text="RAG memory is not enabled.",
+                thread_ts=thread_ts,
+            )
+            return
+        result = await self._rag.search(query)
+        await say(
+            text=result.strip() or "No memory found.",
+            thread_ts=thread_ts,
         )
 
     def _strip_leading_mention(self, text: str) -> str:
