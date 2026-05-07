@@ -12,6 +12,17 @@ try:
 
     _LIGHTRAG_AVAILABLE = True
 except ImportError:
+    class QueryParam:  # type: ignore[no-redef]
+        def __init__(self, mode: str = "hybrid") -> None:
+            self.mode = mode
+
+    class EmbeddingFunc:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    LightRAG = None  # type: ignore[assignment]
+    gpt_4o_mini_complete = None  # type: ignore[assignment]
+    openai_embed = None  # type: ignore[assignment]
     _LIGHTRAG_AVAILABLE = False
 
 
