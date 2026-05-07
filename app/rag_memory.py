@@ -53,3 +53,13 @@ class RagMemory:
         except Exception:
             logger.exception("rag search failed for query %r", query)
             return ""
+
+    async def build_context(self, query: str, mode: str = "hybrid") -> str:
+        """Return a formatted memory context block to prepend to agent input.
+
+        Returns empty string when no relevant memory is found.
+        """
+        result = await self.search(query, mode=mode)
+        if not result or not result.strip():
+            return ""
+        return f"[관련 과거 기억]\n{result.strip()}\n---\n"

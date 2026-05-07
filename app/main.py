@@ -168,6 +168,10 @@ async def _stream_session_events(
         collected: list[str] = []
         thinking_collected: list[str] = []
         agent_text = text_with_location_context(text, location)
+        if rag_memory:
+            mem_ctx = await rag_memory.build_context(text)
+            if mem_ctx:
+                agent_text = mem_ctx + agent_text
         yield (
             "status",
             {

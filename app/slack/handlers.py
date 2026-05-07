@@ -448,6 +448,12 @@ class SlackDMHandler:
             asyncio.create_task(self._rag.index_event(session_id, "user", text))
         self._store.set_session_status(session_id, "running")
 
+        agent_text = text
+        if self._rag:
+            mem_ctx = await self._rag.build_context(text)
+            if mem_ctx:
+                agent_text = mem_ctx + text
+
         agent = self._registry.get(str(session["agent_id"]))
         binding = self._store.get_adapter_binding(session_id)
         state = AdapterState()
@@ -465,7 +471,7 @@ class SlackDMHandler:
             async for delta in self._stream_agent(
                 agent=agent,
                 session=session,
-                text=text,
+                text=agent_text,
                 state=state,
             ):
                 if state.native_session_id != last_persisted_id:
