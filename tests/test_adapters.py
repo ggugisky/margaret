@@ -1,10 +1,12 @@
 import asyncio
 import json
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.adapters import (
     AdapterState,
     _CLI_STREAM_LIMIT,
+    _ensure_user_cli_paths,
     CodexAgentAdapter,
     OpenCodeAgentAdapter,
     ClaudeCodeAgentAdapter,
@@ -23,6 +25,22 @@ async def make_mock_proc(lines: list[str], returncode: int = 0):
     mock_proc.kill = MagicMock()
     mock_proc.wait = AsyncMock()
     return mock_proc
+
+
+def test_ensure_user_cli_paths_prepends_existing_user_bins(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    npm_bin = home / ".npm-global" / "bin"
+    local_bin = home / ".local" / "bin"
+    npm_bin.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    _ensure_user_cli_paths()
+
+    parts = os.environ["PATH"].split(":")
+    assert parts[:2] == [str(npm_bin), str(local_bin)]
+    assert "/usr/bin" in parts
 
 
 @pytest.mark.anyio

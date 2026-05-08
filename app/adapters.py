@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
@@ -14,6 +15,29 @@ logger = logging.getLogger(__name__)
 # CLI agents stream JSONL. Tool results can be a single very large JSON line, and
 # asyncio's default 64 KiB StreamReader limit raises LimitOverrunError on readline.
 _CLI_STREAM_LIMIT = 16 * 1024 * 1024
+
+
+def _ensure_user_cli_paths() -> None:
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".npm-global", "bin"),
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, ".opencode", "bin"),
+        os.path.join(home, ".bun", "bin"),
+        os.path.join(home, ".cargo", "bin"),
+    ]
+    current = os.environ.get("PATH", "")
+    parts = [part for part in current.split(os.pathsep) if part]
+    additions = [
+        path
+        for path in candidates
+        if os.path.isdir(path) and path not in parts
+    ]
+    if additions:
+        os.environ["PATH"] = os.pathsep.join([*additions, *parts])
+
+
+_ensure_user_cli_paths()
 
 
 @dataclass(frozen=True)
