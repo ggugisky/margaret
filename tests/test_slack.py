@@ -143,6 +143,27 @@ def test_settings_slack_disabled_default(monkeypatch) -> None:
     assert cfg.slack_bot_token == ""
 
 
+def test_settings_workspace_root_defaults_to_project_workspace(monkeypatch) -> None:
+    monkeypatch.delenv("MARGARET_WORKSPACE_ROOT", raising=False)
+    monkeypatch.delenv("VOICE_WORKSPACE_ROOT", raising=False)
+
+    cfg = Settings()
+
+    assert cfg.workspace_root.endswith("/workspace")
+    assert not cfg.workspace_root.startswith("/workspace")
+    assert cfg.voice_workspace_root == cfg.workspace_root
+
+
+def test_settings_workspace_root_resolves_relative_env(monkeypatch) -> None:
+    monkeypatch.setenv("MARGARET_WORKSPACE_ROOT", "./workspace")
+    monkeypatch.delenv("VOICE_WORKSPACE_ROOT", raising=False)
+
+    cfg = Settings()
+
+    assert cfg.workspace_root.endswith("/workspace")
+    assert cfg.workspace_root != "./workspace"
+
+
 def test_slack_thread_mapping_helpers(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_map.sqlite3"))
     session = store.create_session("dummy", "dummy/default", "Slack", "slack", None)

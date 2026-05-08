@@ -57,7 +57,7 @@ slack_integration = SlackIntegration(
         store=store,
         registry=registry,
         default_agent=settings.default_agent,
-        workspace_root="/workspace",
+        workspace_root=settings.workspace_root,
         rag_memory=rag_memory,
     ),
 )

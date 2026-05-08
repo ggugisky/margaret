@@ -342,7 +342,8 @@ def test_ws_new_session_uses_workspace_name(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(main.settings, "voice_app_secret", "")
     monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
     monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
-    monkeypatch.setattr(main.settings, "voice_workspace_root", "/workspace")
+    workspace_root = tmp_path / "workspace"
+    monkeypatch.setattr(main.settings, "voice_workspace_root", str(workspace_root))
 
     with TestClient(main.app) as client:
         with client.websocket_connect("/ws") as ws:
@@ -360,4 +361,5 @@ def test_ws_new_session_uses_workspace_name(tmp_path, monkeypatch) -> None:
     session = test_store.get_session(msg["session_key"])
     assert session is not None
     assert session["client"] == "voice"
-    assert session["workspace_path"] == "/workspace/ggugisky"
+    assert session["workspace_path"] == str(workspace_root / "ggugisky")
+    assert (workspace_root / "ggugisky").is_dir()

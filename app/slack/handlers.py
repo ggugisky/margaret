@@ -27,7 +27,7 @@ class SlackDMHandler:
         store: Store,
         registry: AgentRegistry,
         default_agent: str,
-        workspace_root: str = "/workspace",
+        workspace_root: str = "./workspace",
         rag_memory: RagMemory | None = None,
     ) -> None:
         self._store = store

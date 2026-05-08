@@ -161,6 +161,7 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
 - **Slack Channel Mentions**: channel에서 `app_mention`으로 들어온 요청도 원본 message `ts`를 기준으로 thread session을 생성합니다.
 - **Slack Native Streaming**: Slack client가 전달되면 `chat.startStream` / `chat.appendStream` / `chat.stopStream`으로 thread 안에 streaming 답변을 남깁니다.
 - **Slack Thread Limitation**: Slack은 thread reply 아래 nested thread를 지원하지 않습니다. reply message의 `ts`를 `thread_ts`로 보내도 root thread로 보정되므로, thread 내부 질문은 같은 root thread에 답합니다.
+- **Workspace Root**: 기본 workspace는 Margaret project root 하위 `./workspace`입니다. `MARGARET_WORKSPACE_ROOT`로 변경할 수 있고, 상대 경로는 project root 기준으로 해석합니다.
 
 ## 현재 상태
 

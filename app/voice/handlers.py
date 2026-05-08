@@ -79,7 +79,9 @@ class PhoneVoiceWebSocketHandler:
         safe_name = name.strip("/").replace("..", "").replace("\\", "/").strip("/")
         if not safe_name:
             return None
-        return os.path.join(self.settings.voice_workspace_root, safe_name)
+        workspace_path = os.path.join(self.settings.voice_workspace_root, safe_name)
+        os.makedirs(workspace_path, exist_ok=True)
+        return workspace_path
 
     def _create_session(
         self,

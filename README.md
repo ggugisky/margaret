@@ -131,6 +131,10 @@ Environment variables:
 export SLACK_ENABLED=true
 export SLACK_APP_TOKEN=xapp-your-app-level-token
 export SLACK_BOT_TOKEN=xoxb-your-bot-token
+export MARGARET_WORKSPACE_ROOT=./workspace
 ```
 
 When `SLACK_ENABLED` is `false` (default), startup behavior remains unchanged.
+
+`MARGARET_WORKSPACE_ROOT` defaults to `./workspace` under the Margaret project
+directory. Relative paths are resolved from the project root.
