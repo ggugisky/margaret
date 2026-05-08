@@ -280,6 +280,42 @@ async def test_dm_message_creates_and_reuses_session(tmp_path) -> None:
 
 
 @pytest.mark.anyio
+async def test_dm_message_falls_back_when_default_agent_missing(tmp_path) -> None:
+    store = Store(str(tmp_path / "slack_fallback.sqlite3"))
+    handler = SlackDMHandler(
+        store=store,
+        registry=_build_registry(),
+        default_agent="missing-agent",
+        workspace_root=str(tmp_path / "ws"),
+    )
+    say = AsyncMock()
+
+    await handler.handle_message(
+        team_id="T1",
+        event={
+            "type": "message",
+            "channel_type": "im",
+            "channel": "D1",
+            "user": "U1",
+            "ts": "1000.1",
+            "text": "hello",
+        },
+        say=say,
+    )
+
+    session_id = store.get_session_id_by_slack_thread(
+        team_id="T1",
+        channel_id="D1",
+        thread_ts="1000.1",
+        user_id="U1",
+    )
+    assert session_id is not None
+    session = store.get_session(session_id)
+    assert session is not None
+    assert session["agent_id"] == "dummy"
+
+
+@pytest.mark.anyio
 async def test_channel_app_mention_creates_thread_session(tmp_path) -> None:
     store = Store(str(tmp_path / "slack_app_mention.sqlite3"))
     handler = SlackDMHandler(

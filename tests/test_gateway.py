@@ -30,6 +30,15 @@ def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
     assert payload["running"] is False
 
 
+def test_resolve_agent_model_falls_back_when_default_missing(monkeypatch) -> None:
+    monkeypatch.setattr(main.settings, "default_agent", "missing-agent")
+
+    agent_id, model_id = main._resolve_agent_model(None)
+
+    assert agent_id == "echo"
+    assert model_id == "echo/default"
+
+
 def test_create_session_and_history(tmp_path, monkeypatch) -> None:
     test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)

@@ -240,6 +240,12 @@ class SlackDMHandler:
                 agent_id=agent_id,
                 model_id=requested_model,
             )
+            if model_id is None and requested_model is None:
+                agent_id = self._fallback_agent_id()
+                model_id = self._resolve_model_or_reply(
+                    agent_id=agent_id,
+                    model_id=None,
+                )
             if model_id is None:
                 await say(
                     text=self._invalid_agent_model_message(
@@ -388,6 +394,15 @@ class SlackDMHandler:
 
     def _is_known_agent(self, agent_id: str) -> bool:
         return any(agent.id == agent_id for agent in self._registry.list_agents())
+
+    def _fallback_agent_id(self) -> str:
+        agents = self._registry.list_agents()
+        agent_ids = {agent.id for agent in agents}
+        if self._default_agent in agent_ids:
+            return self._default_agent
+        if "echo" in agent_ids:
+            return "echo"
+        return agents[0].id
 
     def _resolve_model_or_reply(
         self, *, agent_id: str, model_id: str | None

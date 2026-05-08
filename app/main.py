@@ -140,7 +140,10 @@ def _resolve_agent_model(
                 if requested in {model.id, model.name}:
                     return agent.id, registry.resolve_model(agent.id, model.id)
 
+    known_agent_ids = {agent.id for agent in agents}
     agent_id = settings.default_agent
+    if agent_id not in known_agent_ids:
+        agent_id = "echo" if "echo" in known_agent_ids else agents[0].id
     return agent_id, registry.resolve_model(agent_id, requested or None)
 
 
