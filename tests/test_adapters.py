@@ -185,6 +185,39 @@ async def test_claudecode_adapter_parsing():
 
 
 @pytest.mark.anyio
+async def test_claudecode_adapter_emits_tool_progress_events():
+    adapter = ClaudeCodeAgentAdapter()
+    state = AdapterState()
+    lines = [
+        '{"type":"system","subtype":"init","session_id":"claude-session-1","tools":[],"mcp_servers":[]}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"README.md"}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"# README"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}',
+        '{"type":"result","subtype":"success","result":"done","session_id":"claude-session-1"}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ):
+        events = []
+        async for event in adapter.stream_reply_events(
+            "ses_test", "hello", "sonnet", adapter_state=state
+        ):
+            events.append(event)
+
+    assert [event.type for event in events] == [
+        "thinking_delta",
+        "thinking_delta",
+        "delta",
+    ]
+    assert "[tool_use] Read" in events[0].data["delta"]
+    assert "README.md" in events[0].data["delta"]
+    assert "[tool_result] toolu_1 # README" in events[1].data["delta"]
+    assert events[2].data["delta"] == "done"
+    assert state.native_session_id == "claude-session-1"
+
+
+@pytest.mark.anyio
 async def test_copilot_adapter_parsing():
     adapter = CopilotAgentAdapter()
     state = AdapterState()

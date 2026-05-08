@@ -123,8 +123,18 @@ class PhoneVoiceWebSocketHandler:
         audio_file_ext = "m4a"
         audio_mime_type = "audio/mp4"
 
-        async def send(obj: dict) -> None:
-            await websocket.send_text(json.dumps(obj, ensure_ascii=False))
+        client_connected = True
+
+        async def send(obj: dict) -> bool:
+            nonlocal client_connected
+            if not client_connected:
+                return False
+            try:
+                await websocket.send_text(json.dumps(obj, ensure_ascii=False))
+            except (RuntimeError, WebSocketDisconnect):
+                client_connected = False
+                return False
+            return True
 
         await send(
             {
@@ -157,9 +167,12 @@ class PhoneVoiceWebSocketHandler:
 
         async def run_text_message(text: str, location: dict | None = None) -> None:
             session_id, _ = await ensure_active_session()
-            await send({"type": "ack", "text": "알겠습니다", "user_text": text})
-            await send({"type": "process_step", "step": "thinking"})
-            await send({"type": "thinking"})
+            if not await send({"type": "ack", "text": "알겠습니다", "user_text": text}):
+                return
+            if not await send({"type": "process_step", "step": "thinking"}):
+                return
+            if not await send({"type": "thinking"}):
+                return
 
             async for event_type, data in self.stream_events(
                 session_id,
@@ -168,12 +181,22 @@ class PhoneVoiceWebSocketHandler:
                 location,
             ):
                 if event_type == "delta":
-                    await send({"type": "text_delta", "delta": data.get("delta", "")})
+                    if not await send(
+                        {"type": "text_delta", "delta": data.get("delta", "")}
+                    ):
+                        return
                 elif event_type == "thinking_delta":
-                    await send({"type": "thinking_delta", "delta": data.get("delta", "")})
+                    if not await send(
+                        {
+                            "type": "thinking_delta",
+                            "delta": data.get("delta", ""),
+                        }
+                    ):
+                        return
                 elif event_type == "done":
                     final_text = data.get("text", "")
-                    await send({"type": "process_step", "step": "tts_start"})
+                    if not await send({"type": "process_step", "step": "tts_start"}):
+                        return
                     if tts_provider != "off":
                         try:
                             chunks = await self.voice_service.synthesize_chunks(
@@ -191,18 +214,25 @@ class PhoneVoiceWebSocketHandler:
                                 }
                                 if index == 0:
                                     payload["full_text"] = final_text
-                                await send(payload)
+                                if not await send(payload):
+                                    return
                         except Exception as exc:
-                            await send(
+                            if not await send(
                                 {
                                     "type": "error",
                                     "message": f"TTS 오류: {exc}",
                                 }
-                            )
-                    await send({"type": "tts_done", "text": final_text})
-                    await send({"type": "done", "text": final_text})
+                            ):
+                                return
+                    if not await send({"type": "tts_done", "text": final_text}):
+                        return
+                    if not await send({"type": "done", "text": final_text}):
+                        return
                 elif event_type == "error":
-                    await send({"type": "error", "message": data.get("message", "")})
+                    if not await send(
+                        {"type": "error", "message": data.get("message", "")}
+                    ):
+                        return
 
         try:
             while True:

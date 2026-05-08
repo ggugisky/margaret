@@ -473,6 +473,24 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
         workspace_path: str | None = None,
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
+        async for event in self.stream_reply_events(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            if event.type == "delta":
+                yield event.data.get("delta", "")
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
         model = model_id or _CLAUDE_CODE_DEFAULT_MODEL
         state = adapter_state or AdapterState()
 
@@ -533,7 +551,46 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
                 elif etype == "assistant":
                     for block in event.get("message", {}).get("content", []):
                         if block.get("type") == "text":
-                            yield block.get("text", "")
+                            yield AgentStreamEvent(
+                                "delta",
+                                {"delta": block.get("text", "")},
+                            )
+                        elif block.get("type") == "tool_use":
+                            name = block.get("name") or block.get("id") or "tool"
+                            args = block.get("input") or {}
+                            args_text = " ".join(_collect_text_fragments(args))
+                            if not args_text and args:
+                                args_text = json.dumps(args, ensure_ascii=False)
+                            progress = f"[tool_use] {name} {args_text}".strip()
+                            yield AgentStreamEvent(
+                                "thinking_delta",
+                                {"delta": progress + "\n", "category": "tool_use"},
+                            )
+                        elif block.get("type") == "thinking":
+                            thinking = " ".join(_collect_text_fragments(block))
+                            if thinking:
+                                yield AgentStreamEvent(
+                                    "thinking_delta",
+                                    {
+                                        "delta": thinking + "\n",
+                                        "category": "thinking",
+                                    },
+                                )
+
+                elif etype == "user":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_result":
+                            tool_id = block.get("tool_use_id") or "tool"
+                            content = " ".join(_collect_text_fragments(block.get("content")))
+                            progress = f"[tool_result] {tool_id} {content}".strip()
+                            if progress:
+                                yield AgentStreamEvent(
+                                    "thinking_delta",
+                                    {
+                                        "delta": progress + "\n",
+                                        "category": "tool_result",
+                                    },
+                                )
 
                 elif etype == "result":
                     if event.get("is_error"):
