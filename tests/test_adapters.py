@@ -122,7 +122,7 @@ async def test_opencode_adapter_parsing():
         async for delta in adapter.stream_reply(
             "ses_test",
             "hello",
-            "amazon-bedrock/anthropic.claude-sonnet-4-6",
+            "opencode/claude-sonnet-4-6",
             adapter_state=state,
         ):
             deltas.append(delta)
@@ -146,7 +146,7 @@ async def test_opencode_adapter_resume_flag():
         async for delta in adapter.stream_reply(
             "ses_test",
             "follow up",
-            "amazon-bedrock/anthropic.claude-sonnet-4-6",
+            "opencode/claude-sonnet-4-6",
             adapter_state=state,
         ):
             deltas.append(delta)
@@ -173,7 +173,7 @@ async def test_opencode_adapter_error_event():
             async for _ in adapter.stream_reply(
                 "ses_test",
                 "hello",
-                "amazon-bedrock/anthropic.claude-sonnet-4-6",
+                "opencode/claude-sonnet-4-6",
                 adapter_state=state,
             ):
                 pass
@@ -249,7 +249,7 @@ async def test_copilot_adapter_parsing():
     ):
         deltas = []
         async for delta in adapter.stream_reply(
-            "ses_test", "hello", "gpt-5.2", adapter_state=state
+            "ses_test", "hello", "gpt-5.4", adapter_state=state
         ):
             deltas.append(delta)
 

@@ -150,10 +150,12 @@ _CODEX_MODELS: tuple[ModelInfo, ...] = (
         id="gpt-5.5", name="GPT-5.5", description="OpenAI GPT-5.5 frontier model."
     ),
     ModelInfo(id="gpt-5.4", name="GPT-5.4", description="OpenAI GPT-5.4."),
+    ModelInfo(id="gpt-5.4-mini", name="GPT-5.4 Mini", description="OpenAI GPT-5.4 Mini."),
+    ModelInfo(id="gpt-5.3-codex", name="GPT-5.3 Codex", description="OpenAI GPT-5.3 Codex."),
     ModelInfo(id="o3", name="o3", description="OpenAI o3 reasoning model."),
 )
 
-_CODEX_DEFAULT_MODEL = "gpt-5.5"
+_CODEX_DEFAULT_MODEL = "gpt-5.4-mini"
 
 
 def _collect_text_fragments(value: Any) -> list[str]:
@@ -342,23 +344,53 @@ class CodexAgentAdapter(AgentAdapter):
 
 _OPENCODE_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
-        id="amazon-bedrock/anthropic.claude-sonnet-4-6",
-        name="Claude Sonnet 4.6 (Bedrock)",
-        description="Anthropic Claude Sonnet 4.6 via Amazon Bedrock.",
+        id="opencode/claude-sonnet-4-6",
+        name="Claude Sonnet 4.6 (OpenCode)",
+        description="Claude Sonnet 4.6 via OpenCode.",
     ),
     ModelInfo(
-        id="amazon-bedrock/anthropic.claude-opus-4-6-v1",
-        name="Claude Opus 4.6 (Bedrock)",
-        description="Anthropic Claude Opus 4.6 via Amazon Bedrock.",
+        id="opencode/claude-opus-4-7",
+        name="Claude Opus 4.7 (OpenCode)",
+        description="Claude Opus 4.7 via OpenCode.",
     ),
     ModelInfo(
-        id="openai/gpt-5.4",
-        name="GPT-5.4 (OpenAI)",
-        description="OpenAI GPT-5.4.",
+        id="opencode/claude-opus-4-6",
+        name="Claude Opus 4.6 (OpenCode)",
+        description="Claude Opus 4.6 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.5",
+        name="GPT-5.5 (OpenCode)",
+        description="GPT-5.5 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.4",
+        name="GPT-5.4 (OpenCode)",
+        description="GPT-5.4 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.4-mini",
+        name="GPT-5.4 Mini (OpenCode)",
+        description="GPT-5.4 Mini via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.3-codex",
+        name="GPT-5.3 Codex (OpenCode)",
+        description="GPT-5.3 Codex via OpenCode.",
+    ),
+    ModelInfo(
+        id="github-copilot/gpt-5-mini",
+        name="GPT-5 Mini (GitHub Copilot)",
+        description="GPT-5 Mini via OpenCode GitHub Copilot provider.",
+    ),
+    ModelInfo(
+        id="github-copilot/claude-haiku-4.5",
+        name="Claude Haiku 4.5 (GitHub Copilot)",
+        description="Claude Haiku 4.5 via OpenCode GitHub Copilot provider.",
     ),
 )
 
-_OPENCODE_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-sonnet-4-6"
+_OPENCODE_DEFAULT_MODEL = "opencode/claude-sonnet-4-6"
 
 
 class OpenCodeAgentAdapter(AgentAdapter):
@@ -471,6 +503,21 @@ _CLAUDE_CODE_MODELS: tuple[ModelInfo, ...] = (
         id="haiku",
         name="Claude Haiku",
         description="Anthropic Claude Haiku (latest).",
+    ),
+    ModelInfo(
+        id="claude-sonnet-4-6",
+        name="Claude Sonnet 4.6",
+        description="Anthropic Claude Sonnet 4.6 full model name.",
+    ),
+    ModelInfo(
+        id="claude-opus-4-7",
+        name="Claude Opus 4.7",
+        description="Anthropic Claude Opus 4.7 full model name.",
+    ),
+    ModelInfo(
+        id="claude-haiku-4.5",
+        name="Claude Haiku 4.5",
+        description="Anthropic Claude Haiku 4.5 full model name.",
     ),
 )
 
@@ -636,18 +683,68 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
 
 _COPILOT_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
-        id="gpt-5.2",
-        name="GPT-5.2",
-        description="OpenAI GPT-5.2 via GitHub Copilot.",
+        id="claude-sonnet-4.6",
+        name="Claude Sonnet 4.6",
+        description="Claude Sonnet 4.6 via GitHub Copilot.",
     ),
     ModelInfo(
-        id="claude-sonnet-4-5",
+        id="claude-sonnet-4.5",
         name="Claude Sonnet 4.5",
-        description="Anthropic Claude Sonnet 4.5 via GitHub Copilot.",
+        description="Claude Sonnet 4.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-haiku-4.5",
+        name="Claude Haiku 4.5",
+        description="Claude Haiku 4.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-opus-4.7",
+        name="Claude Opus 4.7",
+        description="Claude Opus 4.7 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-opus-4.6",
+        name="Claude Opus 4.6",
+        description="Claude Opus 4.6 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.5",
+        name="GPT-5.5",
+        description="GPT-5.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.4",
+        name="GPT-5.4",
+        description="GPT-5.4 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.3-codex",
+        name="GPT-5.3 Codex",
+        description="GPT-5.3 Codex via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.2",
+        name="GPT-5.2",
+        description="GPT-5.2 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.4-mini",
+        name="GPT-5.4 Mini",
+        description="GPT-5.4 Mini via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5-mini",
+        name="GPT-5 Mini",
+        description="GPT-5 Mini via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-4.1",
+        name="GPT-4.1",
+        description="GPT-4.1 via GitHub Copilot.",
     ),
 )
 
-_COPILOT_DEFAULT_MODEL = "gpt-5.2"
+_COPILOT_DEFAULT_MODEL = "gpt-5.4"
 
 
 class CopilotAgentAdapter(AgentAdapter):
