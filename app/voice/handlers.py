@@ -12,6 +12,7 @@ from app.adapters import AgentInfo, registry
 from app.location_context import normalize_location
 from app.security import verify_message_signature, verify_signed_token
 from app.store import Store
+from app.voice.documents import collect_markdown_documents
 from app.voice.service import VoiceService
 
 StreamEvents = Callable[
@@ -197,6 +198,28 @@ class PhoneVoiceWebSocketHandler:
                         return
                 elif event_type == "done":
                     final_text = data.get("text", "")
+                    session = self.store.get_session(session_id)
+                    markdown_documents = collect_markdown_documents(
+                        final_text,
+                        workspace_path=(
+                            str(session.get("workspace_path"))
+                            if session and session.get("workspace_path")
+                            else None
+                        ),
+                        allowed_roots=[
+                            self.settings.workspace_root,
+                            self.settings.voice_workspace_root,
+                        ],
+                    )
+                    for document in markdown_documents:
+                        if not await send(
+                            {
+                                "type": "markdown_document",
+                                "session_key": session_id,
+                                "document": document,
+                            }
+                        ):
+                            return
                     if not await send({"type": "process_step", "step": "tts_start"}):
                         return
                     if tts_provider != "off":
@@ -228,7 +251,13 @@ class PhoneVoiceWebSocketHandler:
                                 return
                     if not await send({"type": "tts_done", "text": final_text}):
                         return
-                    if not await send({"type": "done", "text": final_text}):
+                    if not await send(
+                        {
+                            "type": "done",
+                            "text": final_text,
+                            "documents": markdown_documents,
+                        }
+                    ):
                         return
                 elif event_type == "error":
                     if not await send(

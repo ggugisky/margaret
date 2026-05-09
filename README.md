@@ -72,6 +72,11 @@ events to phone events:
 - `done` -> `tts_done`, `done`
 - `error` -> `error`
 
+When the final assistant text links to a Markdown file inside the session
+workspace, the bridge also sends `markdown_document` events with the file
+content so the phone app can render the document without local filesystem
+access. The same payload is included in `done.documents`.
+
 When `MARGARET_GATEWAY_TOKEN` is set, WebSocket clients can authenticate with
 either `Authorization: Bearer <token>` or `/ws?token=<token>`.
 

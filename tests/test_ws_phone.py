@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.adapters import AgentAdapter, AgentInfo, ModelInfo
 from app.store import Store
 from app.voice.service import TtsChunk
 
@@ -241,6 +242,65 @@ def test_ws_text_message_passes_location_context_to_agent(tmp_path, monkeypatch)
     history = test_store.get_history(session_key, limit=10)
     assert history[0]["role"] == "user"
     assert history[0]["content"] == "nearby coffee?"
+
+
+def test_ws_text_message_sends_linked_markdown_document(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "ws_markdown.sqlite3"))
+    workspace_root = tmp_path / "workspace"
+    workspace = workspace_root / "phone"
+    workspace.mkdir(parents=True)
+    doc_path = workspace / "notes.md"
+    doc_path.write_text("# Notes\n\nPhone-readable content.\n", encoding="utf-8")
+
+    class MarkdownLinkAdapter(AgentAdapter):
+        @property
+        def info(self) -> AgentInfo:
+            return AgentInfo(
+                id="md-link",
+                name="Markdown Link",
+                description="",
+                models=(ModelInfo(id="md-link/default", name="Default"),),
+                default_model="md-link/default",
+            )
+
+        async def stream_reply(
+            self,
+            session_id,
+            text,
+            model_id,
+            workspace_path=None,
+            adapter_state=None,
+        ):
+            yield "문서는 [Notes](notes.md) 에 있어요."
+
+    adapters = dict(main.registry._adapters)
+    adapters["md-link"] = MarkdownLinkAdapter()
+    monkeypatch.setattr(main.registry, "_adapters", adapters)
+    monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "_session_locks", {})
+    monkeypatch.setattr(main.settings, "default_agent", "md-link")
+    monkeypatch.setattr(main.settings, "default_tts_provider", "off")
+    monkeypatch.setattr(main.settings, "gateway_token", "")
+    monkeypatch.setattr(main.settings, "voice_app_secret", "")
+    monkeypatch.setattr(main.settings, "voice_jwt_secret", "")
+    monkeypatch.setattr(main.settings, "voice_msg_hmac_key", "")
+    monkeypatch.setattr(main.settings, "workspace_root", str(workspace_root))
+    monkeypatch.setattr(main.settings, "voice_workspace_root", str(workspace_root))
+    monkeypatch.setattr(main.settings, "voice_workspace_name", "phone")
+
+    with TestClient(main.app) as client:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            ws.send_json({"type": "text_message", "text": "show doc"})
+            messages = _receive_until(ws, "done", limit=50)
+
+    doc_msg = next(msg for msg in messages if msg["type"] == "markdown_document")
+    document = doc_msg["document"]
+    assert document["title"] == "Notes"
+    assert document["filename"] == "notes.md"
+    assert document["mime_type"] == "text/markdown"
+    assert "Phone-readable content." in document["content"]
+    assert messages[-1]["documents"][0]["content"] == document["content"]
 
 
 def test_ws_audio_commit_runs_stt_and_tts(tmp_path, monkeypatch) -> None:

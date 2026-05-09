@@ -103,6 +103,7 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
 - `error`: 오류
 
 `margaret-voice`는 `delta`를 기존 WebSocket `text_delta`로 변환하고, `done.text`를 TTS pipeline으로 넘깁니다.
+최종 응답에 session workspace 내부 Markdown 파일 링크가 있으면 `markdown_document` 이벤트로 파일 내용을 함께 전송하고, `done.documents`에도 같은 payload를 포함합니다.
 
 ## Persistence
 
