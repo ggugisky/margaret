@@ -7,6 +7,13 @@ import pytest
 from app.rag_memory import RagMemory
 
 
+def _make_memory(fake_rag) -> RagMemory:
+    fake_rag.initialize_storages = AsyncMock()
+    mem = RagMemory.__new__(RagMemory)
+    mem._rag = fake_rag
+    return mem
+
+
 # ---------------------------------------------------------------------------
 # build_context
 # ---------------------------------------------------------------------------
@@ -20,14 +27,14 @@ async def test_build_context_returns_formatted_block_when_results_found() -> Non
         instance = MockLightRAG.return_value
         instance.aquery = AsyncMock(return_value="파랑 보이스 API 인증은 JWT 방식으로 처리했음.")
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         ctx = await mem.build_context("파랑 보이스 인증")
 
         assert "[관련 과거 기억]" in ctx
         assert "JWT" in ctx
         assert ctx.endswith("---\n")
+        instance.initialize_storages.assert_awaited_once()
 
 
 @pytest.mark.anyio
@@ -38,8 +45,7 @@ async def test_build_context_returns_empty_when_no_results() -> None:
         instance = MockLightRAG.return_value
         instance.aquery = AsyncMock(return_value="")
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         ctx = await mem.build_context("없는 주제")
         assert ctx == ""
@@ -53,8 +59,7 @@ async def test_build_context_returns_empty_on_whitespace_result() -> None:
         instance = MockLightRAG.return_value
         instance.aquery = AsyncMock(return_value="   \n  ")
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         ctx = await mem.build_context("whitespace")
         assert ctx == ""
@@ -68,11 +73,27 @@ async def test_build_context_returns_empty_on_search_exception() -> None:
         instance = MockLightRAG.return_value
         instance.aquery = AsyncMock(side_effect=RuntimeError("rag 오류"))
 
+        mem = _make_memory(instance)
+
+        ctx = await mem.build_context("쿼리")
+        assert ctx == ""
+
+
+@pytest.mark.anyio
+async def test_build_context_returns_empty_on_initialize_exception() -> None:
+    with patch("app.rag_memory._LIGHTRAG_AVAILABLE", True), patch(
+        "app.rag_memory.LightRAG"
+    ) as MockLightRAG:
+        instance = MockLightRAG.return_value
+        instance.initialize_storages = AsyncMock(side_effect=RuntimeError("init 오류"))
+        instance.aquery = AsyncMock(return_value="should not run")
+
         mem = RagMemory.__new__(RagMemory)
         mem._rag = instance
 
         ctx = await mem.build_context("쿼리")
         assert ctx == ""
+        instance.aquery.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -88,8 +109,7 @@ async def test_index_event_skips_error_role() -> None:
         instance = MockLightRAG.return_value
         instance.ainsert = AsyncMock()
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         await mem.index_event("session-1", "error", "some error")
         instance.ainsert.assert_not_called()
@@ -103,8 +123,7 @@ async def test_index_event_skips_empty_content() -> None:
         instance = MockLightRAG.return_value
         instance.ainsert = AsyncMock()
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         await mem.index_event("session-1", "user", "   ")
         instance.ainsert.assert_not_called()
@@ -118,14 +137,30 @@ async def test_index_event_inserts_with_session_tag() -> None:
         instance = MockLightRAG.return_value
         instance.ainsert = AsyncMock()
 
-        mem = RagMemory.__new__(RagMemory)
-        mem._rag = instance
+        mem = _make_memory(instance)
 
         await mem.index_event("session-abc", "user", "안녕하세요")
         instance.ainsert.assert_called_once()
         call_arg = instance.ainsert.call_args[0][0]
         assert "session-abc" in call_arg
         assert "안녕하세요" in call_arg
+        instance.initialize_storages.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_index_event_swallows_initialize_exception() -> None:
+    with patch("app.rag_memory._LIGHTRAG_AVAILABLE", True), patch(
+        "app.rag_memory.LightRAG"
+    ) as MockLightRAG:
+        instance = MockLightRAG.return_value
+        instance.initialize_storages = AsyncMock(side_effect=RuntimeError("init 오류"))
+        instance.ainsert = AsyncMock()
+
+        mem = RagMemory.__new__(RagMemory)
+        mem._rag = instance
+
+        await mem.index_event("session-abc", "user", "안녕하세요")
+        instance.ainsert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
