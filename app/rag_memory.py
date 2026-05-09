@@ -48,10 +48,17 @@ class RagMemory:
                 func=openai_embed,
             ),
         )
+        self._initialized = False
+
+    async def _ensure_initialized(self) -> None:
+        if not self._initialized:
+            await self._rag.initialize_storages()
+            self._initialized = True
 
     async def index_event(self, session_id: str, role: str, content: str) -> None:
         if role == "error" or not content.strip():
             return
+        await self._ensure_initialized()
         text = f"[session:{session_id}][{role}] {content}"
         try:
             await self._rag.ainsert(text)
@@ -59,6 +66,7 @@ class RagMemory:
             logger.exception("rag index failed for session %s", session_id)
 
     async def search(self, query: str, mode: str = "hybrid") -> str:
+        await self._ensure_initialized()
         try:
             return await self._rag.aquery(query, param=QueryParam(mode=mode))
         except Exception:
