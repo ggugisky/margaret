@@ -12,6 +12,17 @@ try:
 
     _LIGHTRAG_AVAILABLE = True
 except ImportError:
+    class QueryParam:  # type: ignore[no-redef]
+        def __init__(self, mode: str = "hybrid") -> None:
+            self.mode = mode
+
+    class EmbeddingFunc:  # type: ignore[no-redef]
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+
+    LightRAG = None  # type: ignore[assignment]
+    gpt_4o_mini_complete = None  # type: ignore[assignment]
+    openai_embed = None  # type: ignore[assignment]
     _LIGHTRAG_AVAILABLE = False
 
 
@@ -37,19 +48,37 @@ class RagMemory:
                 func=openai_embed,
             ),
         )
+        self._initialized = False
+
+    async def _ensure_initialized(self) -> None:
+        if not getattr(self, "_initialized", False):
+            await self._rag.initialize_storages()
+            self._initialized = True
 
     async def index_event(self, session_id: str, role: str, content: str) -> None:
         if role == "error" or not content.strip():
             return
         text = f"[session:{session_id}][{role}] {content}"
         try:
+            await self._ensure_initialized()
             await self._rag.ainsert(text)
         except Exception:
             logger.exception("rag index failed for session %s", session_id)
 
     async def search(self, query: str, mode: str = "hybrid") -> str:
         try:
+            await self._ensure_initialized()
             return await self._rag.aquery(query, param=QueryParam(mode=mode))
         except Exception:
             logger.exception("rag search failed for query %r", query)
             return ""
+
+    async def build_context(self, query: str, mode: str = "hybrid") -> str:
+        """Return a formatted memory context block to prepend to agent input.
+
+        Returns empty string when no relevant memory is found.
+        """
+        result = await self.search(query, mode=mode)
+        if not result or not result.strip():
+            return ""
+        return f"[관련 과거 기억]\n{result.strip()}\n---\n"

@@ -6,6 +6,9 @@ from slack_bolt.async_app import AsyncApp  # pyright: ignore[reportMissingImport
 from slack_bolt.adapter.socket_mode.aiohttp import (  # pyright: ignore[reportMissingImports]
     AsyncSocketModeHandler,
 )
+from slack_bolt.middleware.assistant.async_assistant import (  # pyright: ignore[reportMissingImports]
+    AsyncAssistant,
+)
 
 from app.config import Settings
 
@@ -43,14 +46,55 @@ class SlackIntegration:
             return False
 
         app = AsyncApp(token=self._settings.slack_bot_token)
+        assistant = AsyncAssistant()
 
-        @app.event("message")
-        async def _on_message(event, say, body, logger):  # noqa: ANN001
+        @assistant.thread_started
+        async def _on_assistant_thread_started(say, set_suggested_prompts):  # noqa: ANN001
+            await set_suggested_prompts(
+                prompts=[
+                    {
+                        "title": "Ask Margaret",
+                        "message": "What can you help me with?",
+                    },
+                    {
+                        "title": "Use Codex",
+                        "message": "codex gpt-5.5 help me inspect this project",
+                    },
+                ],
+            )
+            await say("무엇을 도와드릴까요?")
+
+        @assistant.user_message
+        async def _on_assistant_user_message(event, say, body, client, set_status):  # noqa: ANN001
             team_id = (body.get("team_id") if isinstance(body, dict) else None) or ""
             await self._handler_logic.handle_message(
                 event=event,
                 team_id=team_id,
                 say=say,
+                client=client,
+                set_status=set_status,
+            )
+
+        app.assistant(assistant)
+
+        @app.event("message")
+        async def _on_message(event, say, body, logger, client):  # noqa: ANN001
+            team_id = (body.get("team_id") if isinstance(body, dict) else None) or ""
+            await self._handler_logic.handle_message(
+                event=event,
+                team_id=team_id,
+                say=say,
+                client=client,
+            )
+
+        @app.event("app_mention")
+        async def _on_app_mention(event, say, body, logger, client):  # noqa: ANN001
+            team_id = (body.get("team_id") if isinstance(body, dict) else None) or ""
+            await self._handler_logic.handle_message(
+                event=event,
+                team_id=team_id,
+                say=say,
+                client=client,
             )
 
         self._app = app

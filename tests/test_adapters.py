@@ -1,9 +1,12 @@
 import asyncio
 import json
+import os
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.adapters import (
     AdapterState,
+    _CLI_STREAM_LIMIT,
+    _ensure_user_cli_paths,
     CodexAgentAdapter,
     OpenCodeAgentAdapter,
     ClaudeCodeAgentAdapter,
@@ -22,6 +25,22 @@ async def make_mock_proc(lines: list[str], returncode: int = 0):
     mock_proc.kill = MagicMock()
     mock_proc.wait = AsyncMock()
     return mock_proc
+
+
+def test_ensure_user_cli_paths_prepends_existing_user_bins(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    npm_bin = home / ".npm-global" / "bin"
+    local_bin = home / ".local" / "bin"
+    npm_bin.mkdir(parents=True)
+    local_bin.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    _ensure_user_cli_paths()
+
+    parts = os.environ["PATH"].split(":")
+    assert parts[:2] == [str(npm_bin), str(local_bin)]
+    assert "/usr/bin" in parts
 
 
 @pytest.mark.anyio
@@ -48,6 +67,45 @@ async def test_codex_adapter_parsing():
 
 
 @pytest.mark.anyio
+async def test_codex_adapter_emits_progress_events():
+    adapter = CodexAgentAdapter()
+    lines = [
+        '{"type":"thread.started","thread_id":"codex-thread-1"}',
+        '{"type":"item.completed","item":{"type":"tool_call","name":"shell","arguments":"ls"}}',
+        '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ):
+        events = []
+        async for event in adapter.stream_reply_events("ses_test", "hello", "gpt-5.5"):
+            events.append(event)
+
+    assert [event.type for event in events] == ["thinking_delta", "delta"]
+    assert "tool_call" in events[0].data["delta"]
+    assert events[1].data["delta"] == "done"
+
+
+@pytest.mark.anyio
+async def test_codex_adapter_uses_large_stream_limit():
+    adapter = CodexAgentAdapter()
+    lines = [
+        '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ) as mock_exec:
+        deltas = []
+        async for delta in adapter.stream_reply("ses_test", "hello", "gpt-5.5"):
+            deltas.append(delta)
+
+    assert "".join(deltas) == "ok"
+    assert mock_exec.call_args.kwargs["limit"] == _CLI_STREAM_LIMIT
+
+
+@pytest.mark.anyio
 async def test_opencode_adapter_parsing():
     adapter = OpenCodeAgentAdapter()
     state = AdapterState()
@@ -64,7 +122,7 @@ async def test_opencode_adapter_parsing():
         async for delta in adapter.stream_reply(
             "ses_test",
             "hello",
-            "amazon-bedrock/anthropic.claude-sonnet-4-6",
+            "opencode/claude-sonnet-4-6",
             adapter_state=state,
         ):
             deltas.append(delta)
@@ -88,7 +146,7 @@ async def test_opencode_adapter_resume_flag():
         async for delta in adapter.stream_reply(
             "ses_test",
             "follow up",
-            "amazon-bedrock/anthropic.claude-sonnet-4-6",
+            "opencode/claude-sonnet-4-6",
             adapter_state=state,
         ):
             deltas.append(delta)
@@ -115,7 +173,7 @@ async def test_opencode_adapter_error_event():
             async for _ in adapter.stream_reply(
                 "ses_test",
                 "hello",
-                "amazon-bedrock/anthropic.claude-sonnet-4-6",
+                "opencode/claude-sonnet-4-6",
                 adapter_state=state,
             ):
                 pass
@@ -145,6 +203,39 @@ async def test_claudecode_adapter_parsing():
 
 
 @pytest.mark.anyio
+async def test_claudecode_adapter_emits_tool_progress_events():
+    adapter = ClaudeCodeAgentAdapter()
+    state = AdapterState()
+    lines = [
+        '{"type":"system","subtype":"init","session_id":"claude-session-1","tools":[],"mcp_servers":[]}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"README.md"}}]}}',
+        '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"# README"}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"text","text":"done"}]}}',
+        '{"type":"result","subtype":"success","result":"done","session_id":"claude-session-1"}',
+    ]
+
+    with patch(
+        "asyncio.create_subprocess_exec", return_value=await make_mock_proc(lines)
+    ):
+        events = []
+        async for event in adapter.stream_reply_events(
+            "ses_test", "hello", "sonnet", adapter_state=state
+        ):
+            events.append(event)
+
+    assert [event.type for event in events] == [
+        "thinking_delta",
+        "thinking_delta",
+        "delta",
+    ]
+    assert "[tool_use] Read" in events[0].data["delta"]
+    assert "README.md" in events[0].data["delta"]
+    assert "[tool_result] toolu_1 # README" in events[1].data["delta"]
+    assert events[2].data["delta"] == "done"
+    assert state.native_session_id == "claude-session-1"
+
+
+@pytest.mark.anyio
 async def test_copilot_adapter_parsing():
     adapter = CopilotAgentAdapter()
     state = AdapterState()
@@ -158,7 +249,7 @@ async def test_copilot_adapter_parsing():
     ):
         deltas = []
         async for delta in adapter.stream_reply(
-            "ses_test", "hello", "gpt-5.2", adapter_state=state
+            "ses_test", "hello", "gpt-5.4", adapter_state=state
         ):
             deltas.append(delta)
 

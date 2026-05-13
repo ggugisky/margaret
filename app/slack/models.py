@@ -11,6 +11,8 @@ class SlackMessageContext:
     text: str
     thread_ts: str
     message_ts: str
+    is_dm: bool = False
+    username: str = ""
 
 
 @dataclass(frozen=True)
@@ -19,3 +21,4 @@ class SlackCommand:
     agent_id: str | None = None
     model_id: str | None = None
     prompt: str | None = None
+    query: str | None = None

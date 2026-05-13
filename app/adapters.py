@@ -3,12 +3,41 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# CLI agents stream JSONL. Tool results can be a single very large JSON line, and
+# asyncio's default 64 KiB StreamReader limit raises LimitOverrunError on readline.
+_CLI_STREAM_LIMIT = 16 * 1024 * 1024
+
+
+def _ensure_user_cli_paths() -> None:
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".npm-global", "bin"),
+        os.path.join(home, ".local", "bin"),
+        os.path.join(home, ".opencode", "bin"),
+        os.path.join(home, ".bun", "bin"),
+        os.path.join(home, ".cargo", "bin"),
+    ]
+    current = os.environ.get("PATH", "")
+    parts = [part for part in current.split(os.pathsep) if part]
+    additions = [
+        path
+        for path in candidates
+        if os.path.isdir(path) and path not in parts
+    ]
+    if additions:
+        os.environ["PATH"] = os.pathsep.join([*additions, *parts])
+
+
+_ensure_user_cli_paths()
 
 
 @dataclass(frozen=True)
@@ -33,6 +62,12 @@ class AdapterState:
     native_session_id: str | None = None
 
 
+@dataclass(frozen=True)
+class AgentStreamEvent:
+    type: str
+    data: dict[str, Any]
+
+
 class AgentAdapter(ABC):
     @property
     @abstractmethod
@@ -49,6 +84,23 @@ class AgentAdapter(ABC):
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
         raise NotImplementedError
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
+        async for delta in self.stream_reply(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            yield AgentStreamEvent("delta", {"delta": delta})
 
 
 # ---------------------------------------------------------------------------
@@ -98,10 +150,50 @@ _CODEX_MODELS: tuple[ModelInfo, ...] = (
         id="gpt-5.5", name="GPT-5.5", description="OpenAI GPT-5.5 frontier model."
     ),
     ModelInfo(id="gpt-5.4", name="GPT-5.4", description="OpenAI GPT-5.4."),
+    ModelInfo(id="gpt-5.4-mini", name="GPT-5.4 Mini", description="OpenAI GPT-5.4 Mini."),
+    ModelInfo(id="gpt-5.3-codex", name="GPT-5.3 Codex", description="OpenAI GPT-5.3 Codex."),
     ModelInfo(id="o3", name="o3", description="OpenAI o3 reasoning model."),
 )
 
-_CODEX_DEFAULT_MODEL = "gpt-5.5"
+_CODEX_DEFAULT_MODEL = "gpt-5.4-mini"
+
+
+def _collect_text_fragments(value: Any) -> list[str]:
+    fragments: list[str] = []
+    if value is None:
+        return fragments
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        for item in value:
+            fragments.extend(_collect_text_fragments(item))
+        return fragments
+    if isinstance(value, dict):
+        for key in ("text", "content", "summary", "output", "message", "command"):
+            if key in value:
+                fragments.extend(_collect_text_fragments(value[key]))
+        return fragments
+    return fragments
+
+
+def _format_codex_progress_item(item: dict[str, Any]) -> str:
+    item_type = str(item.get("type") or "item")
+    if item_type == "agent_message":
+        return ""
+
+    if item_type in {"tool_call", "function_call"}:
+        name = item.get("name") or item.get("tool_name") or item.get("call_id") or "tool"
+        args = item.get("arguments") or item.get("args") or item.get("input") or ""
+        args_text = " ".join(_collect_text_fragments(args)) if not isinstance(args, str) else args
+        return f"[{item_type}] {name} {args_text}".strip()
+
+    text = " ".join(_collect_text_fragments(item))
+    if not text:
+        return ""
+    return f"[{item_type}] {text}".strip()
 
 
 class CodexAgentAdapter(AgentAdapter):
@@ -126,6 +218,24 @@ class CodexAgentAdapter(AgentAdapter):
         workspace_path: str | None = None,
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
+        async for event in self.stream_reply_events(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            if event.type == "delta":
+                yield event.data.get("delta", "")
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
         model = model_id or _CODEX_DEFAULT_MODEL
         state = adapter_state or AdapterState()
 
@@ -138,7 +248,7 @@ class CodexAgentAdapter(AgentAdapter):
                 state.native_session_id,
                 "--json",
                 "--skip-git-repo-check",
-                "--full-auto",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "-m",
                 model,
                 text,
@@ -149,7 +259,7 @@ class CodexAgentAdapter(AgentAdapter):
                 "exec",
                 "--json",
                 "--skip-git-repo-check",
-                "--full-auto",
+                "--dangerously-bypass-approvals-and-sandbox",
                 "-m",
                 model,
             ]
@@ -169,6 +279,8 @@ class CodexAgentAdapter(AgentAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -201,7 +313,17 @@ class CodexAgentAdapter(AgentAdapter):
                 elif etype == "item.completed":
                     item = event.get("item", {})
                     if item.get("type") == "agent_message":
-                        yield item.get("text", "")
+                        yield AgentStreamEvent("delta", {"delta": item.get("text", "")})
+                    else:
+                        progress = _format_codex_progress_item(item)
+                        if progress:
+                            yield AgentStreamEvent(
+                                "thinking_delta",
+                                {
+                                    "delta": progress + "\n",
+                                    "category": item.get("type") or "item",
+                                },
+                            )
 
                 elif etype == "error":
                     raise RuntimeError(event.get("message", "codex error"))
@@ -222,23 +344,53 @@ class CodexAgentAdapter(AgentAdapter):
 
 _OPENCODE_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
-        id="amazon-bedrock/anthropic.claude-sonnet-4-6",
-        name="Claude Sonnet 4.6 (Bedrock)",
-        description="Anthropic Claude Sonnet 4.6 via Amazon Bedrock.",
+        id="opencode/claude-sonnet-4-6",
+        name="Claude Sonnet 4.6 (OpenCode)",
+        description="Claude Sonnet 4.6 via OpenCode.",
     ),
     ModelInfo(
-        id="amazon-bedrock/anthropic.claude-opus-4-6-v1",
-        name="Claude Opus 4.6 (Bedrock)",
-        description="Anthropic Claude Opus 4.6 via Amazon Bedrock.",
+        id="opencode/claude-opus-4-7",
+        name="Claude Opus 4.7 (OpenCode)",
+        description="Claude Opus 4.7 via OpenCode.",
     ),
     ModelInfo(
-        id="openai/gpt-5.4",
-        name="GPT-5.4 (OpenAI)",
-        description="OpenAI GPT-5.4.",
+        id="opencode/claude-opus-4-6",
+        name="Claude Opus 4.6 (OpenCode)",
+        description="Claude Opus 4.6 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.5",
+        name="GPT-5.5 (OpenCode)",
+        description="GPT-5.5 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.4",
+        name="GPT-5.4 (OpenCode)",
+        description="GPT-5.4 via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.4-mini",
+        name="GPT-5.4 Mini (OpenCode)",
+        description="GPT-5.4 Mini via OpenCode.",
+    ),
+    ModelInfo(
+        id="opencode/gpt-5.3-codex",
+        name="GPT-5.3 Codex (OpenCode)",
+        description="GPT-5.3 Codex via OpenCode.",
+    ),
+    ModelInfo(
+        id="github-copilot/gpt-5-mini",
+        name="GPT-5 Mini (GitHub Copilot)",
+        description="GPT-5 Mini via OpenCode GitHub Copilot provider.",
+    ),
+    ModelInfo(
+        id="github-copilot/claude-haiku-4.5",
+        name="Claude Haiku 4.5 (GitHub Copilot)",
+        description="Claude Haiku 4.5 via OpenCode GitHub Copilot provider.",
     ),
 )
 
-_OPENCODE_DEFAULT_MODEL = "amazon-bedrock/anthropic.claude-sonnet-4-6"
+_OPENCODE_DEFAULT_MODEL = "opencode/claude-sonnet-4-6"
 
 
 class OpenCodeAgentAdapter(AgentAdapter):
@@ -290,6 +442,7 @@ class OpenCodeAgentAdapter(AgentAdapter):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -351,6 +504,21 @@ _CLAUDE_CODE_MODELS: tuple[ModelInfo, ...] = (
         name="Claude Haiku",
         description="Anthropic Claude Haiku (latest).",
     ),
+    ModelInfo(
+        id="claude-sonnet-4-6",
+        name="Claude Sonnet 4.6",
+        description="Anthropic Claude Sonnet 4.6 full model name.",
+    ),
+    ModelInfo(
+        id="claude-opus-4-7",
+        name="Claude Opus 4.7",
+        description="Anthropic Claude Opus 4.7 full model name.",
+    ),
+    ModelInfo(
+        id="claude-haiku-4.5",
+        name="Claude Haiku 4.5",
+        description="Anthropic Claude Haiku 4.5 full model name.",
+    ),
 )
 
 _CLAUDE_CODE_DEFAULT_MODEL = "sonnet"
@@ -376,6 +544,24 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
         workspace_path: str | None = None,
         adapter_state: AdapterState | None = None,
     ) -> AsyncIterator[str]:
+        async for event in self.stream_reply_events(
+            session_id=session_id,
+            text=text,
+            model_id=model_id,
+            workspace_path=workspace_path,
+            adapter_state=adapter_state,
+        ):
+            if event.type == "delta":
+                yield event.data.get("delta", "")
+
+    async def stream_reply_events(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ) -> AsyncIterator[AgentStreamEvent]:
         model = model_id or _CLAUDE_CODE_DEFAULT_MODEL
         state = adapter_state or AdapterState()
 
@@ -408,6 +594,7 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:
@@ -435,7 +622,46 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
                 elif etype == "assistant":
                     for block in event.get("message", {}).get("content", []):
                         if block.get("type") == "text":
-                            yield block.get("text", "")
+                            yield AgentStreamEvent(
+                                "delta",
+                                {"delta": block.get("text", "")},
+                            )
+                        elif block.get("type") == "tool_use":
+                            name = block.get("name") or block.get("id") or "tool"
+                            args = block.get("input") or {}
+                            args_text = " ".join(_collect_text_fragments(args))
+                            if not args_text and args:
+                                args_text = json.dumps(args, ensure_ascii=False)
+                            progress = f"[tool_use] {name} {args_text}".strip()
+                            yield AgentStreamEvent(
+                                "thinking_delta",
+                                {"delta": progress + "\n", "category": "tool_use"},
+                            )
+                        elif block.get("type") == "thinking":
+                            thinking = " ".join(_collect_text_fragments(block))
+                            if thinking:
+                                yield AgentStreamEvent(
+                                    "thinking_delta",
+                                    {
+                                        "delta": thinking + "\n",
+                                        "category": "thinking",
+                                    },
+                                )
+
+                elif etype == "user":
+                    for block in event.get("message", {}).get("content", []):
+                        if block.get("type") == "tool_result":
+                            tool_id = block.get("tool_use_id") or "tool"
+                            content = " ".join(_collect_text_fragments(block.get("content")))
+                            progress = f"[tool_result] {tool_id} {content}".strip()
+                            if progress:
+                                yield AgentStreamEvent(
+                                    "thinking_delta",
+                                    {
+                                        "delta": progress + "\n",
+                                        "category": "tool_result",
+                                    },
+                                )
 
                 elif etype == "result":
                     if event.get("is_error"):
@@ -457,18 +683,68 @@ class ClaudeCodeAgentAdapter(AgentAdapter):
 
 _COPILOT_MODELS: tuple[ModelInfo, ...] = (
     ModelInfo(
-        id="gpt-5.2",
-        name="GPT-5.2",
-        description="OpenAI GPT-5.2 via GitHub Copilot.",
+        id="claude-sonnet-4.6",
+        name="Claude Sonnet 4.6",
+        description="Claude Sonnet 4.6 via GitHub Copilot.",
     ),
     ModelInfo(
-        id="claude-sonnet-4-5",
+        id="claude-sonnet-4.5",
         name="Claude Sonnet 4.5",
-        description="Anthropic Claude Sonnet 4.5 via GitHub Copilot.",
+        description="Claude Sonnet 4.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-haiku-4.5",
+        name="Claude Haiku 4.5",
+        description="Claude Haiku 4.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-opus-4.7",
+        name="Claude Opus 4.7",
+        description="Claude Opus 4.7 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="claude-opus-4.6",
+        name="Claude Opus 4.6",
+        description="Claude Opus 4.6 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.5",
+        name="GPT-5.5",
+        description="GPT-5.5 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.4",
+        name="GPT-5.4",
+        description="GPT-5.4 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.3-codex",
+        name="GPT-5.3 Codex",
+        description="GPT-5.3 Codex via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.2",
+        name="GPT-5.2",
+        description="GPT-5.2 via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5.4-mini",
+        name="GPT-5.4 Mini",
+        description="GPT-5.4 Mini via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-5-mini",
+        name="GPT-5 Mini",
+        description="GPT-5 Mini via GitHub Copilot.",
+    ),
+    ModelInfo(
+        id="gpt-4.1",
+        name="GPT-4.1",
+        description="GPT-4.1 via GitHub Copilot.",
     ),
 )
 
-_COPILOT_DEFAULT_MODEL = "gpt-5.2"
+_COPILOT_DEFAULT_MODEL = "gpt-5.4"
 
 
 class CopilotAgentAdapter(AgentAdapter):
@@ -523,6 +799,7 @@ class CopilotAgentAdapter(AgentAdapter):
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
             cwd=workspace_path,
+            limit=_CLI_STREAM_LIMIT,
         )
 
         try:

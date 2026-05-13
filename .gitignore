@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 .sisyphus/
 sessions.db
+.runtime/
+logs/
+workspace/

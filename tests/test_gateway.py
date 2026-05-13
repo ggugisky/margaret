@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from fastapi.testclient import TestClient  # pyright: ignore[reportMissingImports]
 
 import json
@@ -16,9 +17,32 @@ def test_health() -> None:
     assert resp.json() == {"ok": True, "service": "margaret-gateway"}
 
 
+def test_docs_hidden_from_public_host() -> None:
+    with TestClient(main.app, base_url="http://stella2.ipdisk.co.kr:38091") as client:
+        docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
+        redoc = client.get("/redoc")
+
+    assert docs.status_code == 404
+    assert openapi.status_code == 404
+    assert redoc.status_code == 404
+
+
+def test_docs_available_from_private_host() -> None:
+    with TestClient(main.app, base_url="http://192.168.0.63:38091") as client:
+        docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
+
+    assert docs.status_code == 200
+    assert "Swagger UI" in docs.text
+    assert openapi.status_code == 200
+    assert openapi.json()["info"]["title"] == "Margaret Gateway"
+
+
 def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
     test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main.settings, "slack_enabled", False)
 
     with TestClient(main.app) as client:
         resp = client.get("/slack/status")
@@ -26,6 +50,15 @@ def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
     payload = resp.json()
     assert payload["enabled"] is False
     assert payload["running"] is False
+
+
+def test_resolve_agent_model_falls_back_when_default_missing(monkeypatch) -> None:
+    monkeypatch.setattr(main.settings, "default_agent", "missing-agent")
+
+    agent_id, model_id = main._resolve_agent_model(None)
+
+    assert agent_id == "echo"
+    assert model_id == "echo/default"
 
 
 def test_create_session_and_history(tmp_path, monkeypatch) -> None:
@@ -52,7 +85,9 @@ def test_create_session_and_history(tmp_path, monkeypatch) -> None:
         assert created.status_code == 200
         created_payload = created.json()
         session_id = created_payload["session_id"]
+        assert created_payload["session_key"] == session_id
         assert created_payload["model_id"] == "echo/default"
+        assert created_payload["source_label"] == "test"
 
         streamed = client.post(
             f"/sessions/{session_id}/messages/stream",
@@ -152,9 +187,67 @@ def test_old_schema_migration(tmp_path) -> None:
         ).fetchall()
     }
     assert "adapter_bindings" in tables
+    assert "routes" in tables
 
     row = conn.execute("select * from sessions where session_id = 'ses_old'").fetchone()
     assert row["title"] == "Old Session"
+    conn.close()
+
+
+def test_routes_api_persists_to_sqlite(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "routes.sqlite3"
+    test_store = main.Store(str(db_path))
+    monkeypatch.setattr(main, "store", test_store)
+
+    route_payload = {
+        "title": "Morning Walk",
+        "start_time": "2026-05-06T10:00:00Z",
+        "end_time": "2026-05-06T10:10:00Z",
+        "duration_sec": 600,
+        "distance_m": 321.5,
+        "step_count": 459,
+        "modes": ["walk"],
+        "start_lat": 37.5,
+        "start_lng": 127.0,
+        "end_lat": 37.501,
+        "end_lng": 127.001,
+        "points": [
+            {"lat": 37.5, "lng": 127.0, "ts": 1778061600000, "mode": "walk"},
+            {
+                "lat": 37.501,
+                "lng": 127.001,
+                "ts": 1778062200000,
+                "speed": 1.2,
+                "mode": "walk",
+                "photo_url": "https://example.test/p.jpg",
+            },
+        ],
+    }
+
+    with TestClient(main.app) as client:
+        created = client.post("/routes", json=route_payload)
+        assert created.status_code == 200
+        created_payload = created.json()
+        assert created_payload["route_id"].startswith("route:")
+        assert created_payload["title"] == "Morning Walk"
+        assert created_payload["points"][1]["photo_url"] == "https://example.test/p.jpg"
+
+        listed = client.get("/routes?limit=20")
+        assert listed.status_code == 200
+        routes = listed.json()["routes"]
+
+    assert len(routes) == 1
+    assert routes[0]["route_id"] == created_payload["route_id"]
+    assert routes[0]["distance_m"] == 321.5
+    assert routes[0]["modes"] == ["walk"]
+    assert routes[0]["points"][0]["lat"] == 37.5
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("select * from routes").fetchone()
+    assert row is not None
+    assert row["title"] == "Morning Walk"
+    assert json.loads(row["points_json"])[1]["photo_url"] == "https://example.test/p.jpg"
     conn.close()
 
 
@@ -249,6 +342,62 @@ def test_api_no_state_leak(tmp_path, monkeypatch) -> None:
         assert "adapter_state_json" not in history_str
 
 
+def test_sessions_endpoint_hides_empty_sessions(tmp_path, monkeypatch) -> None:
+    test_store = Store(str(tmp_path / "hide_empty.sqlite3"))
+    monkeypatch.setattr(main, "store", test_store)
+
+    empty = test_store.create_session(
+        agent_id="echo",
+        model_id="echo/default",
+        title="Empty",
+        client="voice",
+        workspace_path=None,
+    )
+    non_empty = test_store.create_session(
+        agent_id="echo",
+        model_id="echo/default",
+        title="Non Empty",
+        client="voice",
+        workspace_path=None,
+    )
+    test_store.append_event(non_empty["session_id"], "user", "hello")
+
+    with TestClient(main.app) as client:
+        resp = client.get("/sessions")
+
+    assert resp.status_code == 200
+    sessions = resp.json()["sessions"]
+    assert [session["session_id"] for session in sessions] == [non_empty["session_id"]]
+    assert empty["session_id"] not in {session["session_id"] for session in sessions}
+
+
+def test_memory_search_endpoint_uses_rag_memory(monkeypatch) -> None:
+    class FakeRagMemory:
+        async def search(self, query: str, mode: str = "hybrid") -> str:
+            return f"{mode}:{query}"
+
+    monkeypatch.setattr(main, "rag_memory", FakeRagMemory())
+
+    with TestClient(main.app) as client:
+        resp = client.get("/memory/search", params={"q": "RAG 계획"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "query": "RAG 계획",
+        "mode": "hybrid",
+        "result": "hybrid:RAG 계획",
+    }
+
+
+def test_memory_search_endpoint_requires_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(main, "rag_memory", None)
+
+    with TestClient(main.app) as client:
+        resp = client.get("/memory/search", params={"q": "RAG 계획"})
+
+    assert resp.status_code == 503
+
+
 class _ResumeFailureAdapter(AgentAdapter):
     @property
     def info(self) -> AgentInfo:
@@ -306,6 +455,23 @@ class _FailOnceThenSucceedAdapter(AgentAdapter):
             raise RuntimeError("first stream error")
             yield ""
         yield "second attempt works"
+
+
+class _SlowCancelAdapter(AgentAdapter):
+    @property
+    def info(self) -> AgentInfo:
+        return AgentInfo(id="slow-cancel", name="SlowCancel", description="")
+
+    async def stream_reply(
+        self,
+        session_id: str,
+        text: str,
+        model_id: str | None,
+        workspace_path: str | None = None,
+        adapter_state: AdapterState | None = None,
+    ):
+        await asyncio.sleep(60)
+        yield "too late"
 
 
 def test_resume_failure_emits_error_and_preserves_old_binding(
@@ -392,6 +558,48 @@ def test_capture_before_error_persists_binding_state(tmp_path, monkeypatch) -> N
     )
 
 
+def test_canceled_stream_persists_error_event(tmp_path, monkeypatch) -> None:
+    async def run() -> None:
+        test_store = main.Store(str(tmp_path / "cancel_stream.sqlite3"))
+        monkeypatch.setattr(main, "store", test_store)
+        monkeypatch.setattr(main, "_session_locks", {})
+
+        adapter = _SlowCancelAdapter()
+        adapters = dict(main.registry._adapters)
+        adapters[adapter.info.id] = adapter
+        monkeypatch.setattr(main.registry, "_adapters", adapters)
+
+        session = test_store.create_session(
+            agent_id="slow-cancel",
+            model_id=None,
+            title="Cancel",
+            client="test",
+            workspace_path=None,
+        )
+
+        async def consume() -> None:
+            async for _ in main._stream_session_events(
+                session["session_id"],
+                "long request",
+            ):
+                pass
+
+        task = asyncio.create_task(consume())
+        await asyncio.sleep(0.05)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+        history = test_store.get_history(session["session_id"], limit=10)
+        assert [item["role"] for item in history] == ["user", "error"]
+        assert "client disconnected" in history[-1]["content"]
+        assert test_store.get_session(session["session_id"])["status"] == "idle"
+
+    asyncio.run(run())
+
+
 def test_lock_released_after_stream_error_allows_next_request(
     tmp_path, monkeypatch
 ) -> None:
@@ -446,6 +654,7 @@ def test_has_native_binding_flow(tmp_path, monkeypatch) -> None:
         assert created.status_code == 200
         session_id = created.json()["session_id"]
         assert created.json()["has_native_binding"] is False
+        test_store.append_event(session_id, "user", "hello")
 
         list_resp = client.get("/sessions")
         assert list_resp.json()["sessions"][0]["has_native_binding"] is False

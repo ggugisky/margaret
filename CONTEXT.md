@@ -103,6 +103,7 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
 - `error`: 오류
 
 `margaret-voice`는 `delta`를 기존 WebSocket `text_delta`로 변환하고, `done.text`를 TTS pipeline으로 넘깁니다.
+최종 응답에 session workspace 내부 Markdown 파일 링크가 있으면 `markdown_document` 이벤트로 파일 내용을 함께 전송하고, `done.documents`에도 같은 payload를 포함합니다.
 
 ## Persistence
 
@@ -158,6 +159,10 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
 - **Slack DM Mapping**: 하나의 Slack DM thread는 하나의 Margaret session에 고정 매핑됩니다.
 - **Slack User Defaults**: Slack 사용자는 `default <agent> <model>` 형식으로 사용자별 기본 agent/model을 저장할 수 있습니다.
 - **Slack Thread Bootstrap**: 새 DM thread에서만 `@bot <agent> <model> [prompt...]` 형식으로 agent/model을 선택할 수 있고, 기존 thread에서는 변경할 수 없습니다.
+- **Slack Channel Mentions**: channel에서 `app_mention`으로 들어온 요청도 원본 message `ts`를 기준으로 thread session을 생성합니다.
+- **Slack Native Streaming**: Slack client가 전달되면 `chat.startStream` / `chat.appendStream` / `chat.stopStream`으로 thread 안에 streaming 답변을 남깁니다.
+- **Slack Thread Limitation**: Slack은 thread reply 아래 nested thread를 지원하지 않습니다. reply message의 `ts`를 `thread_ts`로 보내도 root thread로 보정되므로, thread 내부 질문은 같은 root thread에 답합니다.
+- **Workspace Root**: 기본 workspace는 Margaret project root 하위 `./workspace`입니다. `MARGARET_WORKSPACE_ROOT`로 변경할 수 있고, 상대 경로는 project root 기준으로 해석합니다.
 
 ## 현재 상태
 
@@ -170,12 +175,24 @@ OpenCode처럼 model 선택이 필수인 adapter는 `requires_model=true`로 노
   - `copilot`
 - Persistent CLI session resume가 구현되어 있습니다.
 - Embedded Slack Socket Mode DM MVP가 구현되어 있습니다.
+- Slack DM/channel mention 응답은 root thread에 native streaming 방식으로 작성됩니다.
 - Slack DM에서는 다음이 가능합니다:
   - 사용자별 default 저장: `@bot default <agent> <model>`
   - 새 thread에서 agent/model 지정: `@bot <agent> <model> [prompt...]`
 - 현재 운영 상태:
   - `nana:/home/ggugi/project/margaret-dev` → `DEV` 브랜치, 포트 `38091`, Slack 활성화, 기본 agent `codex`
   - `nana:/home/ggugi/project/margaret` → production은 현재 중지 상태
+
+## Slack 운영 메모
+
+- Slack app manifest에는 DM thread를 막는 옵션이 없습니다.
+- DM/thread reply는 `chat.postMessage` 또는 `chat.startStream` 호출 시 `channel`과 `thread_ts`로 결정됩니다.
+- DM에서는 이벤트 payload의 `channel` 값인 `D...` channel id를 사용해야 합니다.
+- 앱 설정 변경 후에는 반드시 workspace reinstall이 필요합니다.
+- 권장 bot scopes/events:
+  - scopes: `chat:write`, `app_mentions:read`, `im:history`, `im:read`, `im:write`, `assistant:write`
+  - events: `message.im`, `app_mention`, `assistant_thread_started`, `assistant_thread_context_changed`
+  - Socket Mode app token: `connections:write`
 
 ## 아직 하지 않는 것
 

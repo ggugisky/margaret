@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,7 @@ class Store:
                     thread_ts text not null,
                     user_id text not null,
                     session_id text not null,
+                    owner_user_id text,
                     created_at text not null,
                     updated_at text not null,
                     primary key (team_id, channel_id, thread_ts, user_id),
@@ -92,6 +94,12 @@ class Store:
                 )
                 """
             )
+            st_cols = {
+                row["name"]
+                for row in conn.execute("pragma table_info(slack_threads)").fetchall()
+            }
+            if "owner_user_id" not in st_cols:
+                conn.execute("alter table slack_threads add column owner_user_id text")
             conn.execute(
                 """
                 create index if not exists idx_slack_threads_session_id
@@ -110,6 +118,29 @@ class Store:
                     primary key (team_id, user_id)
                 )
                 """
+            )
+            conn.execute(
+                """
+                create table if not exists routes (
+                    route_id text primary key,
+                    title text not null,
+                    start_time text,
+                    end_time text,
+                    duration_sec real,
+                    distance_m real,
+                    step_count integer,
+                    modes_json text not null,
+                    start_lat real,
+                    start_lng real,
+                    end_lat real,
+                    end_lng real,
+                    points_json text not null,
+                    created_at text not null
+                )
+                """
+            )
+            conn.execute(
+                "create index if not exists idx_routes_created_at on routes(created_at desc)"
             )
 
     def create_session(
@@ -144,6 +175,12 @@ class Store:
             )
         return self.get_session(session_id) or {}
 
+    def _decorate_session(self, session: dict[str, Any]) -> dict[str, Any]:
+        decorated = dict(session)
+        decorated["session_key"] = decorated.get("session_id")
+        decorated["source_label"] = decorated.get("client") or "unknown"
+        return decorated
+
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -164,12 +201,18 @@ class Store:
                 """,
                 (session_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._decorate_session(dict(row)) if row else None
 
-    def list_sessions(self, updated_after: str) -> list[dict[str, Any]]:
+    def list_sessions(
+        self,
+        updated_after: str,
+        *,
+        include_empty: bool = True,
+    ) -> list[dict[str, Any]]:
+        empty_filter = "" if include_empty else "having count(e.event_id) > 0"
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 select s.*, count(e.event_id) as message_count,
                        coalesce(substr((
                            select content from events
@@ -183,11 +226,12 @@ class Store:
                 left join adapter_bindings ab on ab.session_id = s.session_id
                 where s.updated_at >= ?
                 group by s.session_id
+                {empty_filter}
                 order by s.updated_at desc
                 """,
                 (updated_after,),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._decorate_session(dict(row)) for row in rows]
 
     def append_event(self, session_id: str, role: str, content: str) -> dict[str, Any]:
         now = utc_now()
@@ -308,6 +352,85 @@ class Store:
                 ("idle", now, "running"),
             )
 
+    def save_route(self, route: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        route_id = f"route:{uuid.uuid4()}"
+        title = str(route.get("title") or "Route")
+        modes = route.get("modes") if isinstance(route.get("modes"), list) else []
+        points = route.get("points") if isinstance(route.get("points"), list) else []
+        saved = {
+            "route_id": route_id,
+            "title": title,
+            "start_time": route.get("start_time"),
+            "end_time": route.get("end_time"),
+            "duration_sec": route.get("duration_sec"),
+            "distance_m": route.get("distance_m"),
+            "step_count": route.get("step_count"),
+            "modes": modes,
+            "start_lat": route.get("start_lat"),
+            "start_lng": route.get("start_lng"),
+            "end_lat": route.get("end_lat"),
+            "end_lng": route.get("end_lng"),
+            "points": points,
+            "created_at": now,
+        }
+        with self._connect() as conn:
+            conn.execute(
+                """
+                insert into routes (
+                    route_id, title, start_time, end_time, duration_sec, distance_m,
+                    step_count, modes_json, start_lat, start_lng, end_lat, end_lng,
+                    points_json, created_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    route_id,
+                    title,
+                    saved["start_time"],
+                    saved["end_time"],
+                    saved["duration_sec"],
+                    saved["distance_m"],
+                    saved["step_count"],
+                    json.dumps(modes, ensure_ascii=False),
+                    saved["start_lat"],
+                    saved["start_lng"],
+                    saved["end_lat"],
+                    saved["end_lng"],
+                    json.dumps(points, ensure_ascii=False),
+                    now,
+                ),
+            )
+        return saved
+
+    def list_routes(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(limit, 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                select route_id, title, start_time, end_time, duration_sec, distance_m,
+                       step_count, modes_json, start_lat, start_lng, end_lat, end_lng,
+                       points_json, created_at
+                from routes
+                order by created_at desc
+                limit ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        routes: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            try:
+                item["modes"] = json.loads(item.pop("modes_json") or "[]")
+            except json.JSONDecodeError:
+                item["modes"] = []
+            try:
+                item["points"] = json.loads(item.pop("points_json") or "[]")
+            except json.JSONDecodeError:
+                item["points"] = []
+            routes.append(item)
+        return routes
+
     def get_slack_thread_mapping(
         self,
         team_id: str,
@@ -318,11 +441,32 @@ class Store:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                select team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
+                select team_id, channel_id, thread_ts, user_id, session_id,
+                       owner_user_id, created_at, updated_at
                 from slack_threads
                 where team_id = ? and channel_id = ? and thread_ts = ? and user_id = ?
                 """,
                 (team_id, channel_id, thread_ts, user_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def get_slack_thread_by_ts(
+        self,
+        team_id: str,
+        channel_id: str,
+        thread_ts: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                select team_id, channel_id, thread_ts, user_id, session_id,
+                       owner_user_id, created_at, updated_at
+                from slack_threads
+                where team_id = ? and channel_id = ? and thread_ts = ?
+                order by created_at asc
+                limit 1
+                """,
+                (team_id, channel_id, thread_ts),
             ).fetchone()
         return dict(row) if row else None
 
@@ -333,19 +477,31 @@ class Store:
         thread_ts: str,
         user_id: str,
         session_id: str,
+        owner_user_id: str | None = None,
     ) -> None:
         now = utc_now()
         with self._connect() as conn:
             conn.execute(
                 """
                 insert into slack_threads (
-                    team_id, channel_id, thread_ts, user_id, session_id, created_at, updated_at
-                ) values (?, ?, ?, ?, ?, ?, ?)
+                    team_id, channel_id, thread_ts, user_id, session_id,
+                    owner_user_id, created_at, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(team_id, channel_id, thread_ts, user_id) do update set
                     session_id = excluded.session_id,
+                    owner_user_id = coalesce(excluded.owner_user_id, slack_threads.owner_user_id),
                     updated_at = excluded.updated_at
                 """,
-                (team_id, channel_id, thread_ts, user_id, session_id, now, now),
+                (
+                    team_id,
+                    channel_id,
+                    thread_ts,
+                    user_id,
+                    session_id,
+                    owner_user_id,
+                    now,
+                    now,
+                ),
             )
 
     def get_session_id_by_slack_thread(
