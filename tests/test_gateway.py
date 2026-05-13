@@ -17,6 +17,28 @@ def test_health() -> None:
     assert resp.json() == {"ok": True, "service": "margaret-gateway"}
 
 
+def test_docs_hidden_from_public_host() -> None:
+    with TestClient(main.app, base_url="http://stella2.ipdisk.co.kr:38091") as client:
+        docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
+        redoc = client.get("/redoc")
+
+    assert docs.status_code == 404
+    assert openapi.status_code == 404
+    assert redoc.status_code == 404
+
+
+def test_docs_available_from_private_host() -> None:
+    with TestClient(main.app, base_url="http://192.168.0.63:38091") as client:
+        docs = client.get("/docs")
+        openapi = client.get("/openapi.json")
+
+    assert docs.status_code == 200
+    assert "Swagger UI" in docs.text
+    assert openapi.status_code == 200
+    assert openapi.json()["info"]["title"] == "Margaret Gateway"
+
+
 def test_slack_status_endpoint(tmp_path, monkeypatch) -> None:
     test_store = main.Store(str(tmp_path / "gateway.sqlite3"))
     monkeypatch.setattr(main, "store", test_store)

@@ -13,6 +13,10 @@ from fastapi import (  # pyright: ignore[reportMissingImports]
     Request,
     WebSocket,
 )
+from fastapi.openapi.docs import (  # pyright: ignore[reportMissingImports]
+    get_redoc_html,
+    get_swagger_ui_html,
+)
 from fastapi.responses import StreamingResponse  # pyright: ignore[reportMissingImports]
 
 from app.adapters import AdapterState, registry
@@ -40,7 +44,13 @@ from app.voice import PhoneVoiceWebSocketHandler, VoiceService
 from app.rag_memory import RagMemory
 
 
-app = FastAPI(title="Margaret Gateway", version="0.1.0")
+app = FastAPI(
+    title="Margaret Gateway",
+    version="0.1.0",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 store = Store(settings.database_path)
 
 rag_memory: RagMemory | None = None
@@ -63,12 +73,43 @@ slack_integration = SlackIntegration(
 )
 
 _session_locks: dict[str, asyncio.Lock] = {}
+_DOCS_ALLOWED_HOSTS = {"192.168.0.63", "192.168.0.63:38091"}
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
     if session_id not in _session_locks:
         _session_locks[session_id] = asyncio.Lock()
     return _session_locks[session_id]
+
+
+def _require_docs_host(request: Request) -> None:
+    host = request.headers.get("host", "").lower().strip()
+    if host not in _DOCS_ALLOWED_HOSTS:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+@app.get("/openapi.json", include_in_schema=False)
+async def openapi_json(request: Request) -> dict:
+    _require_docs_host(request)
+    return app.openapi()
+
+
+@app.get("/docs", include_in_schema=False)
+async def swagger_docs(request: Request):
+    _require_docs_host(request)
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - Swagger UI",
+    )
+
+
+@app.get("/redoc", include_in_schema=False)
+async def redoc_docs(request: Request):
+    _require_docs_host(request)
+    return get_redoc_html(
+        openapi_url="/openapi.json",
+        title=f"{app.title} - ReDoc",
+    )
 
 
 @app.on_event("startup")
