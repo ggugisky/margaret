@@ -73,7 +73,7 @@ slack_integration = SlackIntegration(
 )
 
 _session_locks: dict[str, asyncio.Lock] = {}
-_DOCS_ALLOWED_HOSTS = {"192.168.0.63", "192.168.0.63:38091"}
+_DOCS_ALLOWED_HOSTS = {"192.168.0.63", "192.168.0.63:38090"}
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
