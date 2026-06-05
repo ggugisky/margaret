@@ -1,8 +1,65 @@
 # Margaret Gateway
 
-Margaret Gateway is a local REST+SSE gateway for controlling CLI agent sessions from clients such as Margaret Voice, Slack, Web UI, and local CLI tools.
+> **One gateway. Every AI assistant.**
 
-## MVP API
+Control Codex, OpenCode, Claude Code, and Copilot through a **single REST+SSE API** —
+from your phone, Slack, browser, or terminal.
+
+![Architecture](docs/architecture.svg)
+
+---
+
+## The Problem
+
+The AI coding assistant landscape is fragmented. You might use Claude Code for complex
+reasoning, Codex for agentic tasks, and OpenCode for interactive sessions — each with
+its own interface, no shared context, and no way to reach them from your phone or Slack.
+
+## The Solution
+
+Margaret Gateway sits in front of all your AI tools and exposes one clean, unified API.
+Any client talks the same protocol. The gateway routes to whichever AI backend you need,
+maintains session state, and streams responses back.
+
+| Without Margaret Gateway | With Margaret Gateway |
+|---|---|
+| N different CLIs, N different interfaces | **One REST + SSE API** for everything |
+| Context lost when switching tools | Persistent native session binding |
+| No mobile or Slack access | Voice, Slack, Web, CLI — all share sessions |
+| Each client needs its own integration | One adapter contract for every backend |
+
+## Key Features
+
+- 🔌 **Universal adapter layer** — SDK-first, CLI-fallback strategy for every backend
+- 📡 **Multi-client** — Voice app, Slack DM, Web UI, and local CLI share the same sessions
+- 🧵 **Persistent sessions** — Native CLI session binding preserves full conversation context
+- 💬 **Embedded Slack** — Socket Mode DM integration in-process, no extra server needed
+- 🧠 **Semantic memory** — LightRAG long-term memory injected into agent context
+- 🔐 **Optional auth** — Bearer token for self-hosted deployments
+- 📦 **Minimal stack** — FastAPI + SQLite + pure Python, runs anywhere
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/ggugisky/margaret.git
+cd margaret
+cp .env.example .env
+uv sync
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8787
+```
+
+Verify:
+
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/agents
+```
+
+---
+
+## API
 
 ```text
 GET  /health
@@ -14,9 +71,9 @@ POST /sessions/{session_id}/messages/stream
 WS   /ws
 ```
 
-## Agent And Model Contract
+### Agent and Model Contract
 
-`GET /agents` returns selectable agents and their models:
+`GET /agents` returns each backend's model list and capabilities:
 
 ```json
 {
@@ -50,87 +107,41 @@ WS   /ws
 }
 ```
 
-The response includes a `has_native_binding` field:
+Backends that require model selection (e.g. OpenCode) declare `requires_model: true`,
+so clients can prompt the user before creating a session.
 
-```json
-{
-  "session_id": "...",
-  "has_native_binding": true,
-  "...": "..."
-}
-```
+---
 
-Adapters such as OpenCode can set `requires_model=true` so clients must choose a model before creating a session.
+## Session Model
+
+Each gateway session binds to exactly one native CLI session.
+
+- **Continuity** — Conversation context is preserved across messages via native CLI resume
+- **Immutability** — `agent_id`, `model_id`, and `workspace_path` are fixed at creation
+- **Switching** — Create a new session to use a different agent or model
+- **Native binding** — `has_native_binding: true` confirms the session is linked to a live process
+
+---
 
 ## Phone WebSocket Bridge
 
-`WS /ws` is a text-only compatibility bridge for the existing `margaret-voice`
-phone protocol. It creates or resumes Gateway sessions and maps Gateway stream
-events to phone events:
+`WS /ws` is a text-only bridge for the `margaret-voice` phone protocol.
 
-- `delta` -> `text_delta`
-- `done` -> `tts_done`, `done`
-- `error` -> `error`
+| Gateway event | Phone event |
+|---|---|
+| `delta` | `text_delta` |
+| `done` | `tts_done`, `done` |
+| `error` | `error` |
 
-When the final assistant text links to a Markdown file inside the session
-workspace, the bridge also sends `markdown_document` events with the file
-content so the phone app can render the document without local filesystem
-access. The same payload is included in `done.documents`.
+When the final response links to a Markdown file inside the session workspace,
+the bridge also sends `markdown_document` events so the phone app can render the
+document without local filesystem access.
 
-When `MARGARET_GATEWAY_TOKEN` is set, WebSocket clients can authenticate with
-either `Authorization: Bearer <token>` or `/ws?token=<token>`.
+---
 
-## Session Persistence
-
-Each Gateway session binds to exactly one native CLI session (e.g., a specific Codex thread or OpenCode session).
-
-- **Continuity**: Conversation context is preserved across messages via native CLI resume capabilities.
-- **Immutability**: `agent_id`, `model_id`, and `workspace_path` are immutable once a session is created.
-- **Switching**: To use a different agent or model, you must create a new session.
-- **Native Binding**: The `has_native_binding` flag in the session response indicates whether the session is successfully linked to a persistent native CLI process.
-- **Handoff**: Summary-based handoff between different agents is not implemented in the current version.
-
-## Development
-
-```bash
-cd ~/project/margaret
-uv sync
-uv run uvicorn app.main:app --reload --port 8787
-```
-
-Optional auth:
-
-```bash
-export MARGARET_GATEWAY_TOKEN=change-me
-```
-
-When `MARGARET_GATEWAY_TOKEN` is set, requests must include:
-
-```text
-Authorization: Bearer change-me
-```
-
-## Embedded Slack Socket Mode (DM MVP)
+## Slack Integration
 
 Margaret Gateway can run an embedded Slack Socket Mode client in the same process.
-
-- Scope: DM/text-only MVP (ignores non-DM events and bot/self messages)
-- Routing: one Slack DM thread maps to one Margaret session
-- Execution: Slack bridge uses in-process adapter registry/store (no HTTP loopback)
-
-DM command syntax (plain text, no slash commands):
-
-- `@bot default <agent> <model>` (or mentionless `default <agent> <model>`):
-  save per-user defaults for future **new threads** only.
-- `@bot <agent> <model>` (or mentionless `<agent> <model>`):
-  in a **new thread**, create a session pinned to that agent/model.
-- `@bot <agent> <model> <prompt...>`:
-  in a **new thread**, create a session and run `<prompt...>` immediately.
-
-Thread mapping is immutable: once a DM thread is mapped to a session, agent/model
-cannot be switched in that thread. Start a new thread to switch.
-
-Environment variables:
 
 ```bash
 export SLACK_ENABLED=true
@@ -139,7 +150,68 @@ export SLACK_BOT_TOKEN=xoxb-your-bot-token
 export MARGARET_WORKSPACE_ROOT=./workspace
 ```
 
-When `SLACK_ENABLED` is `false` (default), startup behavior remains unchanged.
+DM command syntax:
 
-`MARGARET_WORKSPACE_ROOT` defaults to `./workspace` under the Margaret project
-directory. Relative paths are resolved from the project root.
+```
+default <agent> <model>          — save per-user defaults for new threads
+<agent> <model>                  — start a new session in this thread
+<agent> <model> <prompt...>      — start a session and run the prompt immediately
+```
+
+Thread mapping is immutable: once a DM thread is mapped to a session, start a new
+thread to switch agents or models.
+
+Required Slack app scopes: `chat:write`, `app_mentions:read`, `im:history`, `im:read`,
+`im:write`, `assistant:write`
+
+Required events: `message.im`, `app_mention`, `assistant_thread_started`
+
+---
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8787` | HTTP port |
+| `MARGARET_DB_PATH` | `~/.margaret/gateway.sqlite3` | SQLite database path |
+| `MARGARET_GATEWAY_TOKEN` | *(unset)* | Bearer token for auth |
+| `MARGARET_DEFAULT_AGENT` | `echo` | Default agent ID |
+| `MARGARET_WORKSPACE_ROOT` | `./workspace` | Per-user workspace root |
+| `SLACK_ENABLED` | `false` | Enable embedded Slack client |
+| `SLACK_APP_TOKEN` | *(unset)* | Slack app-level token |
+| `SLACK_BOT_TOKEN` | *(unset)* | Slack bot token |
+
+When `MARGARET_GATEWAY_TOKEN` is set, all requests must include:
+
+```text
+Authorization: Bearer <token>
+```
+
+---
+
+## Development
+
+```bash
+uv sync
+uv run uvicorn app.main:app --reload --port 8787
+uv run pytest
+```
+
+---
+
+## Adapter Strategy
+
+Margaret Gateway uses a tiered adapter strategy for each AI backend:
+
+1. **SDK adapter** — preferred when a stable SDK is available
+2. **Headless CLI** — fallback when no SDK exists or the SDK is unstable
+3. **Interactive CLI / PTY** — last resort only
+
+All adapters implement the same internal interface, so clients never need to know
+which strategy is active.
+
+---
+
+## License
+
+[MIT](LICENSE)
