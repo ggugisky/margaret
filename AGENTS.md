@@ -1,28 +1,28 @@
-# AGENTS.md - Margaret Gateway 작업 가이드
+# AGENTS.md
 
-이 파일은 agent가 `~/project/margaret`에서 작업할 때 따르는 운영 지침입니다.
+Guidelines for AI agents working in this repository.
 
-## 프로젝트 원칙
+## Project Principles
 
-- Margaret Gateway는 `margaret-voice`, Slack, Web UI, local CLI가 공통으로 사용하는 control plane입니다.
-- API 계약을 먼저 안정화하고, client는 Gateway 계약에 맞춥니다.
-- 초기 transport는 REST+SSE를 기본으로 합니다.
-- CLI/SDK 차이는 adapter 계층 안에 숨깁니다.
-- agent/model/session은 Gateway의 1급 개념으로 유지합니다.
-- destructive action은 adapter에서 즉시 실행하지 않고 승인 흐름을 붙일 수 있게 설계합니다.
+- Margaret Gateway is the shared control plane for `margaret-voice`, Slack, Web UI, and local CLI clients.
+- Stabilize the API contract first; clients adapt to the gateway contract, not the other way around.
+- Default transport is REST + SSE.
+- Differences between CLI and SDK backends are hidden inside the adapter layer.
+- `agent`, `model`, and `session` are first-class concepts in the gateway.
+- Destructive actions must be designed to support an approval flow rather than executing immediately in the adapter.
 
-## Adapter 전략
+## Adapter Strategy
 
-- SDK가 안정적으로 제공되는 LLM app은 SDK 우선으로 구현합니다.
-- SDK가 없거나 불안정한 LLM app은 headless/non-interactive CLI를 fallback으로 사용합니다.
-- interactive CLI/PTY 직접 제어는 마지막 선택지로 둡니다.
-- 모든 adapter는 Gateway 내부 공통 인터페이스를 구현해야 합니다.
-- OpenCode처럼 model 선택이 필수인 app은 `requires_model=true`와 model 목록을 명시해야 합니다.
+- Prefer SDK-based adapters when a stable SDK is available for the target LLM app.
+- Fall back to headless/non-interactive CLI when no stable SDK exists.
+- Interactive CLI / PTY control is the last resort.
+- Every adapter must implement the gateway's common internal interface.
+- Apps that require model selection (e.g., OpenCode) must declare `requires_model=true` and provide a model list.
 
-## 현재 구현 범위
+## Current Scope
 
-- FastAPI app
-- SQLite session/event 저장
+- FastAPI application
+- SQLite-backed session and event storage
 - REST API:
   - `GET /health`
   - `GET /agents`
@@ -32,40 +32,31 @@
   - `POST /sessions/{session_id}/messages/stream`
 - SSE streaming
 - `echo` development adapter
-- optional bearer token auth
-- agent별 `models`, `default_model`, `requires_model`
-- session별 `model_id` 저장 및 adapter 전달
+- Optional bearer token auth
+- Per-agent `models`, `default_model`, `requires_model`
+- Per-session `model_id` stored and forwarded to adapter
 
-## 아직 하지 않는 것
+## Not Yet Implemented
 
-- 실제 Codex/OpenCode/Claude Code/Copilot adapter
-- subprocess lifecycle 관리
-- SDK 기반 adapter 구현
-- Slack App 연동
+- Real adapters for Codex / OpenCode / Claude Code / Copilot
+- Subprocess lifecycle management
+- SDK-based adapter implementations
+- Slack App integration
 - Web UI
-- workspace allowlist enforcement
-- approval/HITL flow
-- multi-user 권한 모델
+- Workspace allowlist enforcement
+- Approval / HITL flow
+- Multi-user permission model
 
-## 작업 언어
+## Validation
 
-- 사용자가 한국어로 요청하면 한국어로 응답합니다.
-- 코드, API path, env var, schema field는 영어를 사용합니다.
-- 변경 결과는 파일, 의도, 검증 여부 중심으로 간결하게 보고합니다.
-
-## 검증
-
-기본 검증 명령:
+Run tests:
 
 ```bash
-cd ~/project/margaret
 uv run pytest
 ```
 
-개발 서버 실행:
+Start the development server:
 
 ```bash
-cd ~/project/margaret
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8787
 ```
-
